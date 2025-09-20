@@ -86,6 +86,7 @@ try {
             'logged_in' => true,
             'source'    => 'web_profile_info',
         ],
+        'id'              => $account->getId(),
         'username'        => $account->getUsername(),
         'full_name'       => $account->getFullName(),
         'biography'       => $account->getBiography(),
