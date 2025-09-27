@@ -1,0 +1,47 @@
+{
+    "story_link_stickers": [
+        {
+            "end_time_ms": 86400,
+            "height": 0.058529208603580005,
+            "is_fb_sticker": 0,
+            "is_hidden": 0,
+            "is_pinned": 0,
+            "is_sticker": 1,
+            "rotation": 0,
+            "start_time_ms": 0,
+            "width": 0.31620517737027104,
+            "x": 0.751094493852228,
+            "y": 0.527155376753582,
+            "z": 0,
+            "story_link": {
+                "display_url": "s.humanz.ai\/terminalxxx\/69329\/595",
+                "link_title": "Visit Link",
+                "link_type": "web",
+                "url": "https:\/\/l.instagram.com\/?u=https%3A%2F%2Fs.humanz.ai%2Fterminalxxx%2F69329%2F595%3Ffbclid%3DPAZXh0bgNhZW0CMTEAAac0PB2jhf2K56n72eovQCcRX3Q1VA-Vr2Ec9sQDEYy-zK7iqaP2xlaBBJ5TGQ_aem_RxZXao6CV4J1r6jG1WCeUQ&e=AT0g0oqGHJFo2bFP74ZjLqMT279hCpem_-hBXNftmFsVMonheQre6IzWdH3wVxm1dcqryEt4HVkICbtYPKlme_CT5LpDcHLZLNBsvtDMgQ"
+            }
+        }
+    ],
+    "story_bloks_stickers": [
+        {
+            "height": 0.068808139534883,
+            "rotation": 0,
+            "width": 0.29505116279069704,
+            "x": 0.13798448429551202,
+            "y": 0.16351744186046502,
+            "z": 1,
+            "bloks_sticker": {
+                "app_id": "com.bloks.www.sticker.ig.mention.screen",
+                "bloks_sticker_type": "mention",
+                "id": "bloks_sticker_id",
+                "sticker_data": {
+                    "ig_mention": {
+                        "account_id": "5384198251",
+                        "full_name": "TERMINAL X",
+                        "profile_pic_url": "https:\/\/instagram.ftlv19-2.fna.fbcdn.net\/v\/t51.2885-19\/504522239_18368910832182252_3237694661912374822_n.jpg?stp=dst-jpg_s150x150_tt6&efg=eyJ2ZW5jb2RlX3RhZyI6InByb2ZpbGVfcGljLmRqYW5nby43ODYuYzIifQ&_nc_ht=instagram.ftlv19-2.fna.fbcdn.net&_nc_cat=1&_nc_oc=Q6cZ2QF8thK0fmOerezGZTPki1Lkz7pWT2pR1ZPGaCuOiOcoqd0CdxSV4xBFW77IyFf81Hs&_nc_ohc=tVBnwHL3UdoQ7kNvwGNvvrK&_nc_gid=VvazJnZw6MawppOiIowsrg&edm=ANmP7GQBAAAA&ccb=7-5&oh=00_Afbz2riVGmoyvcsXpV03Fy397A4Uq9StFrWERZUFpIkbVg&oe=68DE24F0&_nc_sid=982cc7",
+                        "username": "terminalx"
+                    }
+                }
+            }
+        }
+    ]
+}
