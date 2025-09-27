@@ -292,7 +292,7 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
   $procErr = tesseractAvailable() ? [] : ['ocr_not_enabled'];
   $procErr = array_values(array_unique(array_merge($procErr,$procErrors)));
 
-  return [
+  $result = [
     "media_id"        => (string)($mediaId??''),
     "user_id"         => $userPk ? (string)$userPk : (string)$uid,
     "username"        => $username ?? null,
@@ -324,6 +324,62 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
     "content_hash"    => $contentHash,
     "processing"      => ["extraction_version"=>"1.1.0","errors"=> $procErr],
   ];
+
+  // Add rich Instagram metadata if requested
+  if (envs('IG_RICH_OUTPUT', '') === '1') {
+    // Add highlights info if available
+    if (!empty($it['highlights_info'])) {
+      $result['highlights_info'] = $it['highlights_info'];
+    }
+
+    // Add detailed user info
+    if (!empty($it['user'])) {
+      $result['user_info'] = [
+        'full_name' => $it['user']['full_name'] ?? null,
+        'is_verified' => $it['user']['is_verified'] ?? false,
+        'is_private' => $it['user']['is_private'] ?? false,
+        'profile_pic_url' => $it['user']['profile_pic_url'] ?? null,
+      ];
+    }
+
+    // Add music info
+    if (!empty($it['story_music_stickers'])) {
+      $result['music_info'] = [];
+      foreach ($it['story_music_stickers'] as $music) {
+        if (!empty($music['music_asset_info'])) {
+          $result['music_info'][] = [
+            'title' => $music['music_asset_info']['title'] ?? null,
+            'artist' => $music['music_asset_info']['display_artist'] ?? null,
+            'ig_username' => $music['music_asset_info']['ig_artist']['username'] ?? null,
+          ];
+        }
+      }
+    }
+
+    // Add rich URL details with titles and types
+    $richUrls = [];
+    foreach ($urls as $url) {
+      $enrichedUrl = $url;
+
+      // Find link details from story_link_stickers
+      if (!empty($it['story_link_stickers'])) {
+        foreach ($it['story_link_stickers'] as $ls) {
+          $linkUrl = $ls['story_link']['url'] ?? null;
+          if ($linkUrl && unwrapInstagramShim($linkUrl) === $url['text']) {
+            $enrichedUrl['link_title'] = $ls['story_link']['link_title'] ?? null;
+            $enrichedUrl['link_type'] = $ls['story_link']['link_type'] ?? null;
+            $enrichedUrl['display_url'] = $ls['story_link']['display_url'] ?? null;
+            break;
+          }
+        }
+      }
+
+      $richUrls[] = $enrichedUrl;
+    }
+    $result['urls'] = $richUrls;
+  }
+
+  return $result;
 }
 
 function extractUrlsFromStoryStickers(array $it, array &$urls): void {
