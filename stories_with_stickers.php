@@ -234,6 +234,7 @@ foreach($tray as $it){
     if($captionText!==null) $captionText=trim($captionText);
   }
 
+
   $takenAtIso=toIso($it['taken_at']??null); $expiringIso=toIso($it['expiring_at']??null);
   $type='story';
 
@@ -425,11 +426,50 @@ foreach($tray as $it){
     $st=$q['question_sticker']??[]; $text=$st['question']??($st['question_text']??''); if($text!=='') $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($st),'confidence'=>0.0];
   }
 
-  /* ----- optional debug dump of raw story link fields ----- */
+  // story_text_stickers - Instagram's built-in text stickers (typed text)
+  if(!empty($it['story_static_models'])) foreach($it['story_static_models'] as $sm){
+    $text = $sm['text']??($sm['display_text']??($sm['sticker_text']??''));
+    if($text!=='') {
+      $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($sm),'confidence'=>1.0];
+      $rawTextCandidates[]=$text;
+      // Check for coupon codes in text
+      foreach(couponCodesFromText($text) as $c){
+        $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>bboxOrDefault($sm),'confidence'=>1.0];
+      }
+    }
+  }
+
+  // story_overlay_stickers - overlay text elements
+  if(!empty($it['story_overlay_stickers'])) foreach($it['story_overlay_stickers'] as $os){
+    $text = $os['text']??($os['display_text']??($os['sticker_text']??''));
+    if($text!=='') {
+      $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($os),'confidence'=>1.0];
+      $rawTextCandidates[]=$text;
+      foreach(couponCodesFromText($text) as $c){
+        $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>bboxOrDefault($os),'confidence'=>1.0];
+      }
+    }
+  }
+
+  /* ----- optional debug dump of raw story fields ----- */
   if ($debugOn) {
     $debug = [];
-    foreach (['story_cta','story_link_stickers','tappable_objects','story_bloks_stickers','story_app_attribution','story_shopping_stickers','story_cta_stickers','swipe_up_link','action_link'] as $k) {
+    foreach (['story_cta','story_link_stickers','tappable_objects','story_bloks_stickers','story_app_attribution','story_shopping_stickers','story_cta_stickers','swipe_up_link','action_link','story_static_models','story_text_stickers','story_overlay_stickers'] as $k) {
       if (!empty($it[$k])) $debug[$k] = $it[$k];
+    }
+    // Also capture any field that might contain text or ALL fields for complete debugging
+    if (envs('IG_DEBUG_FULL', '') === '1') {
+      // Full debug - dump everything
+      $debug = $it;
+    } else {
+      // Selective debug - only text/sticker related fields
+      foreach (array_keys($it) as $k) {
+        if (strpos($k, 'text') !== false || strpos($k, 'sticker') !== false || strpos($k, 'static') !== false || strpos($k, 'overlay') !== false) {
+          if (!empty($it[$k]) && !isset($debug[$k])) {
+            $debug[$k] = $it[$k];
+          }
+        }
+      }
     }
     if (!empty($debug)) {
       @file_put_contents(__DIR__.'/story_debug.json', json_encode($debug, JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT));
@@ -439,6 +479,28 @@ foreach($tray as $it){
   /* ----- OCR (image/video) ----- */
   $rawTextCandidates=[]; if($captionText) $rawTextCandidates[]=$captionText;
   $hasText=false;
+
+  // Extract text from Instagram's accessibility_caption (AI-generated text description)
+  if(isset($it['accessibility_caption'])){
+    $accessibilityText = trim((string)$it['accessibility_caption']);
+    // Extract text after "טקסט שאומר" (Hebrew) or "text that says" (English)
+    if(preg_match('/טקסט שאומר\s+[\'"]([^\'"]++)[\'"]/', $accessibilityText, $matches) ||
+       preg_match('/text that says\s+[\'"]([^\'"]++)[\'"]/', $accessibilityText, $matches)){
+      $extractedText = trim($matches[1]);
+      if($extractedText !== ''){
+        $rawTextCandidates[] = $extractedText;
+        $hasText = true;
+        // Check for coupon codes
+        foreach(couponCodesFromText($extractedText) as $c){
+          $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.9];
+        }
+        // Add as generic text sticker
+        $stickers[]=['type'=>'generic','text'=>$extractedText,'bbox'=>[0,0,0,0],'confidence'=>0.9];
+        // Check for URLs in extracted text
+        foreach(urlsFromText($extractedText) as $u){ $urls[strtolower($u['text'])]=$u; }
+      }
+    }
+  }
 
   if (tesseractAvailable()) {
     // image story
