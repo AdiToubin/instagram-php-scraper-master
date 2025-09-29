@@ -6,7 +6,10 @@ import random
 import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
-
+import json, random, re, time
+from typing import Any, Dict, Optional
+import requests
+from requests.exceptions import RequestException, Timeout
 import requests
 
 # ============== CONFIG (edit here) ==============
@@ -134,7 +137,7 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
         "taken_at_iso": row.get("taken_at_iso"),
         "type": row.get("type"),
         # מהמודל:
-        "brand": result.get("brand"),
+        #"brand": result.get("brand"),
         "coupon_code": result.get("coupon_code"),
         "url": result.get("url"),
         "evidence": result.get("evidence"),
@@ -175,7 +178,7 @@ Do NOT assume any other hidden fields.
 Output JSON (strict):
 {
   "is_relevant": boolean,
-  "brand": string|null,
+ 
   "coupon_code": string|null,
   "url": string|null,
   "evidence": { "collab": string[], "coupon": string[], "url": string[] }
@@ -196,6 +199,23 @@ def minimal_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         "permalink_present": bool(row.get("permalink")),
     }
 
+JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+    m = JSON_BLOCK_RE.search(text)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except json.JSONDecodeError as e:
+            print("❌ JSON decode error inside block:", e)
+    try:
+        start = text.index("{")
+        end = text.rindex("}") + 1
+        return json.loads(text[start:end])
+    except Exception as e:
+        print("❌ Could not extract JSON from text:", e)
+        return None
+
 def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     user_content = {"row_minimal": minimal_payload(row)}
     payload = {
@@ -206,55 +226,81 @@ def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
         ],
+        # "response_format": {"type": "json_object"},  # אם המודל תומך – מומלץ!
     }
 
     max_attempts = 6
     backoff = 1.5
 
     for attempt in range(1, max_attempts + 1):
-        rate_limit_sleep()
-        resp = requests.post(OPENAI_URL, headers=OA_HEADERS, json=payload, timeout=60)
+        try:
+            print("=" * 60)
+            print(f"▶️ Attempt {attempt}/{max_attempts}")
+            print("➡️ URL:", OPENAI_URL)
+            print("➡️ Headers:", OA_HEADERS)
+            print("➡️ Payload:", json.dumps(payload, ensure_ascii=False)[:500], "...")
+            
+            resp = requests.post(
+                OPENAI_URL, headers=OA_HEADERS, json=payload, timeout=90
+            )
+            
+            print("⬅️ Status:", resp.status_code)
+            print("⬅️ Headers:", resp.headers)
+            print("⬅️ Raw response text:", resp.text[:800], "...")
+            
+        except Timeout:
+            print(f"⏱️ Timeout on attempt {attempt}")
+            sleep_s = min(backoff * 2, 30.0)
+            time.sleep(sleep_s)
+            backoff = sleep_s
+            continue
+        except RequestException as e:
+            print("❌ Network error:", e)
+            return None
 
         if resp.status_code == 200:
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            try:
+                data = resp.json()
+                print("✅ JSON response parsed OK")
+            except ValueError as e:
+                print("❌ Response is not JSON:", e)
+                return None
+
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            print("➡️ Model content:", content[:500], "...")
+
             try:
                 return json.loads(content)
             except json.JSONDecodeError:
-                # נסיון לחלץ JSON נקי מתוך טקסט
-                try:
-                    start = content.index("{")
-                    end = content.rindex("}") + 1
-                    return json.loads(content[start:end])
-                except Exception:
-                    print("❌ JSON parse error from model:", content[:250])
-                    return None
+                parsed = _extract_json(content)
+                if parsed is not None:
+                    return parsed
+                print("❌ Failed to parse JSON from content")
+                return None
 
-        if resp.status_code == 429:
+        elif resp.status_code == 429:
             retry_after = resp.headers.get("retry-after")
             if retry_after:
                 sleep_s = float(retry_after)
             else:
-                jitter = random.uniform(0, backoff * 0.4)
-                sleep_s = backoff + jitter
-                backoff = min(backoff * 2, 30.0)
-            print(f"⚠️ 429 rate-limited. Sleeping {sleep_s:.1f}s (attempt {attempt}/{max_attempts})")
+                sleep_s = min(backoff * 2, 30.0)
+                backoff = sleep_s
+            print(f"⚠️ 429 Too Many Requests – sleeping {sleep_s:.1f}s")
             time.sleep(sleep_s)
             continue
 
-        if resp.status_code in (500, 502, 503, 504):
-            jitter = random.uniform(0, backoff * 0.4)
-            sleep_s = backoff + jitter
-            backoff = min(backoff * 2, 30.0)
-            print(f"⚠️ {resp.status_code} server error. Sleeping {sleep_s:.1f}s (attempt {attempt}/{max_attempts})")
+        elif resp.status_code in (500, 502, 503, 504):
+            sleep_s = min(backoff * 2, 30.0)
+            backoff = sleep_s
+            print(f"⚠️ {resp.status_code} server error – sleeping {sleep_s:.1f}s")
             time.sleep(sleep_s)
             continue
 
-        print(f"❌ OpenAI error {resp.status_code}: {resp.text[:300]}")
-        return None
+        else:
+            print(f"❌ OpenAI error {resp.status_code}: {resp.text[:800]}")
+            return None
 
     raise RuntimeError("Request failed after retries")
-
 # ----- Filtering policy (pre-checks before model) -----
 def has_any_textual_signal(row: Dict[str, Any]) -> bool:
     if row.get("caption_text"):
