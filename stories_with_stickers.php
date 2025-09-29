@@ -73,7 +73,6 @@ function classifySticker(?string $text, ?string $url=null): string {
 /* ---------- deep URL harvester ---------- */
 function harvestUrlsDeep(mixed $data, array &$out): void {
   if (is_string($data)) {
-    // נכניס כל http/https (כולל l.instagram.com). רק נקזז קבצי מדיה CDN.
     if (preg_match('~^https?://~i',$data)) {
       $u=trim($data);
       $host=strtolower((string)(parse_url($u,PHP_URL_HOST)??''));
@@ -85,9 +84,7 @@ function harvestUrlsDeep(mixed $data, array &$out): void {
     }
     return;
   }
-  if (is_array($data)) {
-    foreach ($data as $k=>$v) harvestUrlsDeep($v,$out);
-  }
+  if (is_array($data)) foreach ($data as $k=>$v) harvestUrlsDeep($v,$out);
 }
 
 /* ---------- unwrap l.instagram.com shim ---------- */
@@ -96,11 +93,7 @@ function unwrapInstagramShim(string $url): string {
   $host = strtolower($parts['host'] ?? '');
   if ($host === 'l.instagram.com') {
     parse_str($parts['query'] ?? '', $q);
-    if (!empty($q['u'])) {
-      $decoded = urldecode($q['u']);
-      // הגנה בסיסית: אם יש עוד עיטופים – נסיר
-      return $decoded;
-    }
+    if (!empty($q['u'])) return urldecode($q['u']);
   }
   return $url;
 }
@@ -147,25 +140,19 @@ function runTesseract(string $imagePath, string $langs='heb+eng'): ?string {
 /* ---------- Extract URLs / emails / IG handles from free text ---------- */
 function urlsFromText(string $text): array {
   $urls=[];
-  // נרמול ידיות בסגנון "handle@" -> "@handle"
   $textNorm = preg_replace('/\b([A-Za-z0-9._]{2,30})@/u', '@$1', $text);
-
-  // http(s) URLs
   if (preg_match_all('~https?://[^\s\)\]]+~iu',$textNorm,$m)){
     foreach($m[0] as $u){
       $u=trim($u);
       $urls[strtolower($u)]=['text'=>unwrapInstagramShim($u),'resolved_domain'=>resolveDomain($u)];
     }
   }
-  // emails -> נמיר ל mailto: וגם נוסיף דומיין כרמז
   if (preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/iu',$textNorm,$m)){
     foreach($m[0] as $e){
-      $e=trim($e);
-      $mailto='mailto:'.$e;
+      $mailto='mailto:'.trim($e);
       $urls[strtolower($mailto)]=['text'=>$mailto,'resolved_domain'=>resolveDomain('http://'.substr($e,strpos($e,'@')+1))];
     }
   }
-  // @handles -> נבנה כתובת IG פרופיל
   if (preg_match_all('/@([A-Za-z0-9._]{2,30})/u',$textNorm,$m)){
     foreach($m[1] as $h){
       $u='https://www.instagram.com/'.$h;
@@ -198,12 +185,49 @@ $client=new Client([
     'X-Requested-With'=>'XMLHttpRequest',
     'X-IG-App-ID'=>'936619743392459',
     'X-CSRFToken'=>$csrf,
-    // אפשר להעשיר קוקיז אם יש לך (mid, ig_did, ig_nrcb, וכו')
     'Cookie'=>"csrftoken={$csrf}; sessionid={$sess}; ds_user_id={$dsid};",
     'Sec-Fetch-Site'=>'same-origin','Sec-Fetch-Mode'=>'cors','Sec-Fetch-Dest'=>'empty',
-    // אופציונלי: 'X-IG-WWW-Claim'=>envs('IG_WWW_CLAIM','0'),
   ],
 ]);
+
+/* === SUPABASE: יצירת לקוח פעם אחת לפי env === */
+$supaUrl   = rtrim(envs('SUPABASE_URL',''), '/');
+$supaKey   = envs('SUPABASE_KEY','');
+$supaTable = envs('SUPABASE_TABLE','stories_raw');
+$sbClient  = null;
+
+if ($supaUrl!=='' && $supaKey!=='') {
+  $sbClient = new Client([
+    'base_uri'    => $supaUrl.'/rest/v1/',
+    'http_errors' => false,
+    'timeout'     => 30,
+    'headers'     => [
+      'apikey'        => $supaKey,
+      'Authorization' => 'Bearer '.$supaKey,
+      'Content-Type'  => 'application/json',
+      'Prefer'        => 'resolution=merge-duplicates, return=minimal'
+    ],
+  ]);
+} else {
+  fwrite(STDERR, "WARN: SUPABASE_URL / SUPABASE_KEY not set – DB insert disabled.\n");
+}
+
+/* === SUPABASE: פונקציה ששומרת סטורי יחיד RAW === */
+function sb_upsert_story(?Client $sbClient, string $table, array $story): void {
+  if (!$sbClient) return;
+  try {
+    $res = $sbClient->post($table, [
+      'query' => ['on_conflict' => 'media_id'],   // UPSERT לפי media_id (עמודה מחושבת)
+      'json'  => [['payload' => $story]],         // RAW JSON
+    ]);
+    $code = $res->getStatusCode();
+    if ($code < 200 || $code >= 300) {
+      fwrite(STDERR, "Supabase insert error: HTTP {$code}\n".(string)$res->getBody()."\n");
+    }
+  } catch (\Throwable $e) {
+    fwrite(STDERR, "Supabase insert exception: ".$e->getMessage()."\n");
+  }
+}
 
 /* ---------- API call ---------- */
 $res=$client->post('api/v1/feed/reels_media/',['form_params'=>['user_ids'=>json_encode([(string)$uid],JSON_UNESCAPED_SLASHES)]]);
@@ -233,7 +257,6 @@ foreach($tray as $it){
     $captionText=is_array($it['caption'])?($it['caption']['text']??null):(string)$it['caption'];
     if($captionText!==null) $captionText=trim($captionText);
   }
-
 
   $takenAtIso=toIso($it['taken_at']??null); $expiringIso=toIso($it['expiring_at']??null);
   $type='story';
@@ -275,9 +298,7 @@ foreach($tray as $it){
         $un=unwrapInstagramShim($u);
         $urls[]=['text'=>trim($un),'resolved_domain'=>resolveDomain($un)];
       }
-    }
-    // Additional object types that may contain shopping/store links
-    elseif (in_array($objType, ['product', 'shopping', 'storefront', 'external_link', 'web_link'])) {
+    } elseif (in_array($objType, ['product','shopping','storefront','external_link','web_link'])) {
       $u = $to['product']['external_url'] ??
            $to['shopping']['url'] ??
            $to['storefront']['url'] ??
@@ -291,7 +312,7 @@ foreach($tray as $it){
     }
   }
 
-  // 4) story_bloks_stickers – לעיתים URL ב-bloks_data
+  // 4) story_bloks_stickers
   if(!empty($it['story_bloks_stickers'])) foreach($it['story_bloks_stickers'] as $bl){
     $data=$bl['bloks_sticker']['bloks_data']??($bl['bloks_data']??null);
     if(is_string($data)) $data=json_decode($data,true);
@@ -314,7 +335,7 @@ foreach($tray as $it){
     }
   }
 
-  // 6) story_shopping_stickers (shopping tags)
+  // 6) story_shopping_stickers
   if(!empty($it['story_shopping_stickers'])) foreach($it['story_shopping_stickers'] as $shop){
     $u = $shop['shopping_sticker']['url'] ??
          $shop['url'] ??
@@ -325,7 +346,7 @@ foreach($tray as $it){
     }
   }
 
-  // 7) story_cta_stickers (call-to-action stickers)
+  // 7) story_cta_stickers
   if(!empty($it['story_cta_stickers'])) foreach($it['story_cta_stickers'] as $cta){
     $u = $cta['cta_sticker']['url'] ??
          $cta['url'] ??
@@ -336,7 +357,7 @@ foreach($tray as $it){
     }
   }
 
-  // 8) Check for swipe_up_link or action_link (common in influencer content)
+  // 8) swipe_up_link / action_link
   if(!empty($it['swipe_up_link'])){
     $u = is_array($it['swipe_up_link']) ?
          ($it['swipe_up_link']['url'] ?? $it['swipe_up_link']['link_url'] ?? null) :
@@ -346,7 +367,6 @@ foreach($tray as $it){
       $urls[]=['text'=>trim($un),'resolved_domain'=>resolveDomain($un)];
     }
   }
-
   if(!empty($it['action_link'])){
     $u = is_array($it['action_link']) ?
          ($it['action_link']['url'] ?? $it['action_link']['link_url'] ?? null) :
@@ -357,7 +377,6 @@ foreach($tray as $it){
     }
   }
 
-  // deep harvest on other sticker containers
   foreach (['story_product_items','story_feed_media','story_music_stickers','story_shopping_stickers','story_cta_stickers'] as $k){
     if(!empty($it[$k])){
       $map=[]; harvestUrlsDeep($it[$k],$map);
@@ -369,7 +388,6 @@ foreach($tray as $it){
     foreach(urlsFromText($captionText) as $u){ $urls[strtolower($u['text'])]=$u; }
   }
 
-  // uniq by text
   $urls = array_values(array_reduce($urls,function($acc,$it){
     $acc[strtolower($it['text'])]=$it; return $acc;
   },[]));
@@ -388,19 +406,12 @@ foreach($tray as $it){
   /* ----- stickers (structured) ----- */
   $stickers=[];
   if(!empty($it['story_cta'])) foreach($it['story_cta'] as $cta){ foreach(($cta['links']??[]) as $lnk){
-    $u=$lnk['webUri']??($lnk['url']??($lnk['link_url']??(($lnk['story_link']['link_context']['url']??null))));
-    $un=$u?unwrapInstagramShim($u):null;
+    $u=$lnk['webUri']??($lnk['url']??($lnk['link_url']??(($lnk['story_link']['link_context']['url']??null)))); $un=$u?unwrapInstagramShim($u):null;
     $text=stickerTextOf($lnk);
-    if($un||$text){
-      $stickers[]=['type'=>classifySticker($text,$un),'text'=>$text?:($un??''),'bbox'=>[0,0,0,0],'confidence'=>0.0];
-    }
+    if($un||$text){ $stickers[]=['type'=>classifySticker($text,$un),'text'=>$text?:($un??''),'bbox'=>[0,0,0,0],'confidence'=>0.0]; }
   }}
   if(!empty($it['story_link_stickers'])) foreach($it['story_link_stickers'] as $ls){
-    $u=$ls['story_link']['url']??
-       ($ls['url']??
-       ($ls['link_url']??
-       (($ls['story_link']['link_context']['url']??null))));
-    $un=$u?unwrapInstagramShim($u):null;
+    $u=$ls['story_link']['url']??($ls['url']??($ls['link_url']??(($ls['story_link']['link_context']['url']??null)))); $un=$u?unwrapInstagramShim($u):null;
     $text=stickerTextOf($ls);
     $stickers[]=['type'=>classifySticker($text,$un),'text'=>$text?:($un??''),'bbox'=>bboxOrDefault($ls),'confidence'=>0.0];
   }
@@ -417,38 +428,12 @@ foreach($tray as $it){
   foreach (($it['story_sliders']??[]) as $s){
     $st=$s['slider_sticker']??[]; $text=trim(($st['question']??'').' '.($st['emoji']??'')); if($text!=='') $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($st),'confidence'=>0.0];
   }
-  $quizArr=$it['story_quizs']??($it['story_quiz']??[]);
-  foreach($quizArr as $q){
+  $quizArr=$it['story_quizs']??($it['story_quiz']??[]); foreach($quizArr as $q){
     $st=$q['quiz_sticker']??[]; $choices=array_map(fn($t)=>$t['text']??'',$st['tallies']??[]); $text=trim(($st['question']??'').' '.implode(' ',$choices));
     if($text!=='') $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($st),'confidence'=>0.0];
   }
   foreach (($it['story_questions']??[]) as $q){
     $st=$q['question_sticker']??[]; $text=$st['question']??($st['question_text']??''); if($text!=='') $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($st),'confidence'=>0.0];
-  }
-
-  // story_text_stickers - Instagram's built-in text stickers (typed text)
-  if(!empty($it['story_static_models'])) foreach($it['story_static_models'] as $sm){
-    $text = $sm['text']??($sm['display_text']??($sm['sticker_text']??''));
-    if($text!=='') {
-      $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($sm),'confidence'=>1.0];
-      $rawTextCandidates[]=$text;
-      // Check for coupon codes in text
-      foreach(couponCodesFromText($text) as $c){
-        $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>bboxOrDefault($sm),'confidence'=>1.0];
-      }
-    }
-  }
-
-  // story_overlay_stickers - overlay text elements
-  if(!empty($it['story_overlay_stickers'])) foreach($it['story_overlay_stickers'] as $os){
-    $text = $os['text']??($os['display_text']??($os['sticker_text']??''));
-    if($text!=='') {
-      $stickers[]=['type'=>'generic','text'=>$text,'bbox'=>bboxOrDefault($os),'confidence'=>1.0];
-      $rawTextCandidates[]=$text;
-      foreach(couponCodesFromText($text) as $c){
-        $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>bboxOrDefault($os),'confidence'=>1.0];
-      }
-    }
   }
 
   /* ----- optional debug dump of raw story fields ----- */
@@ -457,73 +442,49 @@ foreach($tray as $it){
     foreach (['story_cta','story_link_stickers','tappable_objects','story_bloks_stickers','story_app_attribution','story_shopping_stickers','story_cta_stickers','swipe_up_link','action_link','story_static_models','story_text_stickers','story_overlay_stickers'] as $k) {
       if (!empty($it[$k])) $debug[$k] = $it[$k];
     }
-    // Also capture any field that might contain text or ALL fields for complete debugging
     if (envs('IG_DEBUG_FULL', '') === '1') {
-      // Full debug - dump everything
       $debug = $it;
     } else {
-      // Selective debug - only text/sticker related fields
       foreach (array_keys($it) as $k) {
         if (strpos($k, 'text') !== false || strpos($k, 'sticker') !== false || strpos($k, 'static') !== false || strpos($k, 'overlay') !== false) {
-          if (!empty($it[$k]) && !isset($debug[$k])) {
-            $debug[$k] = $it[$k];
-          }
+          if (!empty($it[$k]) && !isset($debug[$k])) $debug[$k] = $it[$k];
         }
       }
     }
-    if (!empty($debug)) {
-      @file_put_contents(__DIR__.'/story_debug.json', json_encode($debug, JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT));
-    }
+    if (!empty($debug)) { @file_put_contents(__DIR__.'/story_debug.json', json_encode($debug, JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT)); }
   }
 
   /* ----- OCR (image/video) ----- */
   $rawTextCandidates=[]; if($captionText) $rawTextCandidates[]=$captionText;
   $hasText=false;
 
-  // Extract text from Instagram's accessibility_caption (AI-generated text description)
   if(isset($it['accessibility_caption'])){
     $accessibilityText = trim((string)$it['accessibility_caption']);
-    // Extract text after "טקסט שאומר" (Hebrew) or "text that says" (English)
-    if(preg_match('/טקסט שאומר\s+[\'"]([^\'"]++)[\'"]/', $accessibilityText, $matches) ||
-       preg_match('/text that says\s+[\'"]([^\'"]++)[\'"]/', $accessibilityText, $matches)){
-      $extractedText = trim($matches[1]);
-      if($extractedText !== ''){
-        $rawTextCandidates[] = $extractedText;
-        $hasText = true;
-        // Check for coupon codes
-        foreach(couponCodesFromText($extractedText) as $c){
-          $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.9];
-        }
-        // Add as generic text sticker
-        $stickers[]=['type'=>'generic','text'=>$extractedText,'bbox'=>[0,0,0,0],'confidence'=>0.9];
-        // Check for URLs in extracted text
+    if(preg_match('/טקסט שאומר\s+[\'"]([^\'"]++)[\'"]/', $accessibilityText, $m) ||
+       preg_match('/text that says\s+[\'"]([^\'"]++)[\'"]/', $accessibilityText, $m)){
+      $extractedText = trim($m[1]);
+      if($extractedText!==''){
+        $rawTextCandidates[]=$extractedText; $hasText=true;
         foreach(urlsFromText($extractedText) as $u){ $urls[strtolower($u['text'])]=$u; }
+        foreach(couponCodesFromText($extractedText) as $c){ $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.9]; }
+        $stickers[]=['type'=>'generic','text'=>$extractedText,'bbox'=>[0,0,0,0],'confidence'=>0.9];
       }
     }
   }
 
   if (tesseractAvailable()) {
-    // image story
     if ($imageUrl && (!$videoUrl || ($durMs??0)===0)) {
       $imgPath = downloadToTemp($client,$imageUrl,'.jpg');
       if ($imgPath){
         $txt=runTesseract($imgPath,$ocrLangs);
         if ($txt && trim($txt)!==''){
-          $rawTextCandidates[]=$txt;
-          $hasText=true;
+          $rawTextCandidates[]=$txt; $hasText=true;
           foreach(urlsFromText($txt) as $u){ $urls[strtolower($u['text'])]=$u; }
-          // קופונים
-          foreach(couponCodesFromText($txt) as $c){
-            $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.0];
-          }
+          foreach(couponCodesFromText($txt) as $c){ $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.0]; }
         }
       }
-    }
-    // video story -> prefer ffmpeg; fallback to thumbnail if missing/failed
-    elseif ($videoUrl) {
+    } elseif ($videoUrl) {
       $frameTxt = null;
-      $ffOk = false;
-
       if ($ffmpeg!=='') {
         $vid = downloadToTemp($client,$videoUrl,'.mp4');
         if ($vid){
@@ -531,70 +492,47 @@ foreach($tray as $it){
           $sec = max(1, min( floor((($durMs??60000)/1000)/2), 45 ));
           $cmd = '"'.$ffmpeg.'" -y -ss '.$sec.' -i '.escapeshellarg($vid).' -frames:v 1 '.escapeshellarg($frame).' 2>NUL';
           exec($cmd,$o,$rc);
-          if ($rc===0 && is_file($frame)){
-            $frameTxt=runTesseract($frame,$ocrLangs);
-            $ffOk = true;
-          } else {
-            $procErrors[] = 'ffmpeg_extract_failed';
-          }
-        } else {
-          $procErrors[] = 'ffmpeg_download_failed';
-        }
-      } else {
-        $procErrors[] = 'ffmpeg_missing';
-      }
+          if ($rc===0 && is_file($frame)){ $frameTxt=runTesseract($frame,$ocrLangs); }
+          else { $procErrors[] = 'ffmpeg_extract_failed'; }
+        } else { $procErrors[] = 'ffmpeg_download_failed'; }
+      } else { $procErrors[] = 'ffmpeg_missing'; }
 
       if ($frameTxt && trim($frameTxt)!=='') {
         $rawTextCandidates[]=$frameTxt; $hasText=true;
         foreach(urlsFromText($frameTxt) as $u){ $urls[strtolower($u['text'])]=$u; }
-        foreach(couponCodesFromText($frameTxt) as $c){
-          $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.0];
-        }
-      } else {
-        // Fallback OCR על ה-thumbnail
-        if ($imageUrl){
-          $imgPath = downloadToTemp($client,$imageUrl,'.jpg');
-          if ($imgPath){
-            $txt=runTesseract($imgPath,$ocrLangs);
-            if ($txt && trim($txt)!==''){
-              $rawTextCandidates[]=$txt; $hasText=true;
-              foreach(urlsFromText($txt) as $u){ $urls[strtolower($u['text'])]=$u; }
-              foreach(couponCodesFromText($txt) as $c){
-                $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.0];
-              }
-            }
+        foreach(couponCodesFromText($frameTxt) as $c){ $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.0]; }
+      } else if ($imageUrl){
+        $imgPath = downloadToTemp($client,$imageUrl,'.jpg');
+        if ($imgPath){
+          $txt=runTesseract($imgPath,$ocrLangs);
+          if ($txt && trim($txt)!==''){
+            $rawTextCandidates[]=$txt; $hasText=true;
+            foreach(urlsFromText($txt) as $u){ $urls[strtolower($u['text'])]=$u; }
+            foreach(couponCodesFromText($txt) as $c){ $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.0]; }
           }
         }
       }
     }
   }
 
-  // dedupe raw texts
   $rawTextCandidates = uniqStrings(array_merge($rawTextCandidates, array_values(array_filter(array_map(fn($s)=>$s['text']??'', $stickers)))));
 
-  // add URL stickers for found urls (if missing)
   $haveUrlSticker=[]; foreach($stickers as $s){ if(($s['type']??'')==='url' && !empty($s['text'])) $haveUrlSticker[strtolower($s['text'])]=1; }
   foreach($urls as $u){
     $k=strtolower($u['text']);
     if(empty($haveUrlSticker[$k])) $stickers[]=['type'=>'url','text'=>$u['text'],'bbox'=>[0,0,0,0],'confidence'=>0.0];
   }
 
-  // frames_used heuristic
   $framesUsed=[]; if($durMs && $durMs>0){ $framesUsed=[0, min(45000,max(0,$durMs-1)), min(90000,max(0,$durMs-1))]; $framesUsed=array_values(array_unique($framesUsed)); }
 
-  // OCR fields in schema
-  $ocrText = null; $ocrConf = 0.0; // (אפשר לשדרג ל-hOCR/TSV להפקת confidence אמיתי)
-  // flags
+  $ocrText = null; $ocrConf = 0.0;
   $hasText = $hasText || ($captionText!==null && $captionText!=='') || !empty($rawTextCandidates);
 
-  // language guess
   $lang = langGuess($captionText ?? ($rawTextCandidates[0] ?? null));
 
-  // content hash
   $hashBase=json_encode(['media_id'=>$mediaId,'caption'=>$captionText,'urls'=>array_map(fn($u)=>$u['text'],$urls),'hashtags'=>$hashtags,'mentions'=>$mentions],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
   $contentHash=sha1((string)$hashBase);
 
-  // processing errors compose
   $procErr = tesseractAvailable() ? [] : ['ocr_not_enabled'];
   $procErr = array_values(array_unique(array_merge($procErr,$procErrors)));
 
@@ -605,32 +543,28 @@ foreach($tray as $it){
     "type"            => $type,
     "taken_at_iso"    => $takenAtIso,
     "expiring_at_iso" => $expiringIso,
-
     "permalink"       => null,
     "image_url"       => $imageUrl ?? null,
     "video_url"       => $videoUrl ?? null,
-
     "caption_text"    => $captionText ?? null,
     "ocr_text"        => $ocrText,
     "ocr_confidence"  => (float)$ocrConf,
-
     "stickers"        => $stickers,
     "urls"            => array_values($urls),
     "raw_text_candidates" => $rawTextCandidates,
     "hashtags"        => $hashtags,
     "mentions"        => $mentions,
-
     "frames_used"     => $framesUsed,
     "media_meta"      => ["width"=>(int)$width,"height"=>(int)$height,"duration_ms"=>(int)($durMs??0)],
-
     "language_guess"  => $lang,
     "brand_candidates"=> [],
     "source_flags"    => ["has_text"=>(bool)$hasText,"has_stickers"=>!empty($stickers),"has_logo_hint"=>false],
-
     "content_hash"    => $contentHash,
     "processing"      => ["extraction_version"=>"1.1.0","errors"=> $procErr],
   ];
-  $out[]=$obj;
+
+  $out[]=$obj;                                // לפלט
+  sb_upsert_story($sbClient, $supaTable, $obj); // === SUPABASE: שליחה מיידית לכל סטורי
 }
 
 /* ---------- output ---------- */
