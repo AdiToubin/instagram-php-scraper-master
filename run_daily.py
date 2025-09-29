@@ -1,27 +1,24 @@
-# run_daily.py — table-matched version (no processed column)
-
 import os
 import time
-import random
 import json
-from typing import Dict, Any, List, Optional
+import re
+import requests
 from datetime import datetime, timezone
-import json, random, re, time
-from typing import Any, Dict, Optional
-import requests
+from typing import Dict, Any, List, Optional
 from requests.exceptions import RequestException, Timeout
-import requests
 
-# ============== CONFIG (edit here) ==============
+# ============== CONFIG ==============
 SUPABASE_URL = "https://dgxkdenkbaphzabkcybq.supabase.co".rstrip("/")
-SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRneGtkZW5rYmFwaHphYmtjeWJxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwMTEwNjgsImV4cCI6MjA3NDU4NzA2OH0.5nU857rLJCM82icLoYuNAvFhbJOhy9ZVUn12JQ61uy4"
+SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRneGtkZW5rYmFwaHphYmtjeWJxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwMTEwNjgsImV4cCI6MjA3NDU4NzA2OH0.5nU857rLJCM82icLoYuNAvFhbJOhy9ZVUn12JQ61uy4"  # 🔒 החלף ב-SERVICE_ROLE שלך
 
-RAW_TABLE = "raw_story"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY"
+if not OPENAI_API_KEY:
+    raise ValueError("Missing OPENAI_API_KEY")
+
+RAW_TABLE = "stories_raw"
 REL_TABLE = "relevant_story"
-
 MODEL = "gpt-4o-mini"
 MAX_ROWS = 50
-# =================================================
 
 SUPABASE_REST = f"{SUPABASE_URL}/rest/v1"
 SB_HEADERS = {
@@ -30,16 +27,15 @@ SB_HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=representation",
 }
-
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 OA_HEADERS = {
     "Authorization": f"Bearer {OPENAI_API_KEY}",
     "Content-Type": "application/json",
 }
+# ====================================
 
-# ----- Rate limiting -----
 LAST_CALL_TS = 0.0
-MIN_INTERVAL_S = 0.5  # עד 2 קריאות לשנייה
+MIN_INTERVAL_S = 0.5
 
 def rate_limit_sleep():
     global LAST_CALL_TS
@@ -49,7 +45,6 @@ def rate_limit_sleep():
         time.sleep(MIN_INTERVAL_S - delta)
     LAST_CALL_TS = time.time()
 
-# ----- Utilities -----
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -62,20 +57,14 @@ def sb_patch(path: str, params: Dict[str, str], body: Dict[str, Any]) -> request
 def sb_post(path: str, body: Dict[str, Any], prefer: Optional[str] = None, params: Optional[Dict[str, str]] = None) -> requests.Response:
     headers = SB_HEADERS.copy()
     if prefer:
-        # מאפשר upsert
         headers["Prefer"] = prefer
     return requests.post(path, headers=headers, params=params, data=json.dumps(body), timeout=30)
 
-# ----- Supabase I/O -----
 def get_raw_rows(limit: int = MAX_ROWS) -> List[Dict[str, Any]]:
-    """
-    מושך את השורות האחרונות מהטבלה (בלי סינון לפי processed).
-    נדלג אח"כ בקוד על מי שכבר טופל (קיים ב-relevant_story).
-    """
     url = f"{SUPABASE_REST}/{RAW_TABLE}"
     params = {
         "select": "*",
-        "order": "taken_at_iso.desc",  # קיים אצלך כ-timestamptz
+        "order": "inserted_at.desc",
         "limit": str(limit),
     }
     r = sb_get(url, params)
@@ -85,15 +74,6 @@ def get_raw_rows(limit: int = MAX_ROWS) -> List[Dict[str, Any]]:
     return r.json()
 
 def set_processing_status(media_id: str, status: str, last_error: Optional[str] = None, extra: Optional[Dict[str, Any]] = None):
-    """
-    כותב לתוך השדה JSONB בשם 'processing' מעקב סטטוס:
-    {
-      "status": "ok|skipped|non_relevant|error",
-      "last_error": "...",
-      "ts": "...",
-      ...extra
-    }
-    """
     url = f"{SUPABASE_REST}/{RAW_TABLE}"
     params = {"media_id": f"eq.{media_id}"}
     payload = {
@@ -109,93 +89,75 @@ def set_processing_status(media_id: str, status: str, last_error: Optional[str] 
         print("⚠️ set_processing_status failed:", r.status_code, r.text)
 
 def already_in_relevant(media_id: str) -> bool:
-    """
-    בדיקה האם ה-media_id כבר קיים בטבלת היעד כדי למנוע כפילות.
-    """
     url = f"{SUPABASE_REST}/{REL_TABLE}"
-    params = {
-        "select": "media_id",
-        "media_id": f"eq.{media_id}",
-        "limit": "1",
-    }
+    params = {"select": "media_id", "media_id": f"eq.{media_id}", "limit": "1"}
     r = sb_get(url, params)
     if r.status_code >= 400:
         print("⚠️ relevant lookup error:", r.status_code, r.text)
-        # במקרה של שגיאה לא נבלום עיבוד
         return False
-    arr = r.json()
-    return bool(arr)
+    return bool(r.json())
 
 def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
-    """
-    upsert ל-relevant_story לפי media_id (דורש ייחודיות/אינדקס יוניק על media_id).
-    """
     payload = {
         "media_id": row.get("media_id"),
         "user_id": row.get("user_id"),
-        "username": row.get("username"),
-        "taken_at_iso": row.get("taken_at_iso"),
-        "type": row.get("type"),
-        # מהמודל:
-        #"brand": result.get("brand"),
-        "coupon_code": result.get("coupon_code"),
+        "name": result.get("name") or row.get("username"),
+        "brand": result.get("brand"),
+        "coupon": result.get("coupon"),
         "url": result.get("url"),
-        "evidence": result.get("evidence"),
-        "source": "openai_filter_json_bot",
-        "model": MODEL,
+        "date": row.get("taken_at_iso"),
+        "Description": result.get("Description") or row.get("caption_text") or row.get("ocr_text"),
     }
     url = f"{SUPABASE_REST}/{REL_TABLE}"
-    # upsert: צריך on_conflict=media_id + Prefer: resolution=merge-duplicates
-    r = sb_post(
-        url,
-        payload,
-        prefer="return=representation,resolution=merge-duplicates",
-        params={"on_conflict": "media_id"},
-    )
+    r = sb_post(url, payload, prefer="return=representation,resolution=merge-duplicates", params={"on_conflict": "media_id"})
     if r.status_code >= 400:
         print("❌ upsert relevant failed:", r.status_code, r.text)
     r.raise_for_status()
     return r.json()
-
-# ----- OpenAI -----
+#############################################################
 SYSTEM_PROMPT = """You are filter_json_bot.
-Goal: Decide if a single Instagram media row is relevant.
+Goal: Decide if a single Instagram media row is relevant and extract structured fields for database insertion.
 
-Decision rule:
-is_relevant = has_collab AND (has_coupon_code OR has_url).
+Relevance rule:
+is_relevant = has_collab AND (has_coupon_code OR has_url)
 
 Definitions (case-insensitive):
-- has_collab if ANY signals appear:
-  English: "paid partnership", "sponsored", "ad", "#ad", "#sponsored", "#paidpartnership", "partnered", "collab".
-  Hebrew: "בשיתוף פעולה", "שת״פ", "שתפ", "תוכן ממומן", "פרסומת", "חסות", "בשיתוף עם", "פרסומי", hashtags like #שת״פ, #שתפ, #בשיתוף_פעולה.
-- has_coupon_code if a concrete code pattern appears (e.g. SAVE20, FOX15). If only a coupon keyword appears but there's a URL, treat as coupon evidence.
-- has_url if any valid URL is detected or a permalink exists.
+- has_collab: if ANY of these signals appear:
+  Hebrew: "בשיתוף פעולה", "שת״פ", "שתפ", "תוכן ממומן", "פרסומת", "חסות", "בשיתוף עם", "פרסומי"
+  English: "paid partnership", "sponsored", "ad", "#ad", "#sponsored", "#paidpartnership", "partnered", "collab"
+  Hashtags: #ad, #ads, #sponsored, #partner, #paidpartnership, #שת״פ, #שתפ, #בשיתוף_פעולה
 
-Input policy:
-You ONLY receive minimal fields: caption_text, ocr_text, stickers, hashtags, booleans has_image/has_video, and permalink_present.
-Do NOT assume any other hidden fields.
+- has_coupon_code: if a concrete code (e.g. SAVE20, FOX15) appears.
+- has_url: if there's any valid URL or permalink.
 
-Output JSON (strict):
+Input:
+You get: caption_text, ocr_text, stickers, hashtags, has_image, has_video, permalink_present
+
+Output (strict JSON):
 {
   "is_relevant": boolean,
- 
-  "coupon_code": string|null,
+  "brand": string|null,
+  "name": string|null,
+  "coupon": string|null,
   "url": string|null,
-  "evidence": { "collab": string[], "coupon": string[], "url": string[] }
+  "Description": string|null,
+  "evidence": {
+    "collab": [string],
+    "coupon": [string],
+    "url": [string]
+  }
 }
-Return ONLY valid JSON with those keys, no extra commentary.
+Return ONLY valid JSON. No commentary.
 """
 
 def minimal_payload(row: Dict[str, Any]) -> Dict[str, Any]:
-    has_image = bool(row.get("image_url"))
-    has_video = bool(row.get("video_url"))
     return {
         "caption_text": row.get("caption_text"),
         "ocr_text": row.get("ocr_text"),
         "stickers": row.get("stickers"),
         "hashtags": row.get("hashtags"),
-        "has_image": has_image,
-        "has_video": has_video,
+        "has_image": bool(row.get("image_url")),
+        "has_video": bool(row.get("video_url")),
         "permalink_present": bool(row.get("permalink")),
     }
 
@@ -206,14 +168,14 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     if m:
         try:
             return json.loads(m.group(1))
-        except json.JSONDecodeError as e:
-            print("❌ JSON decode error inside block:", e)
+        except json.JSONDecodeError:
+            pass
     try:
         start = text.index("{")
         end = text.rindex("}") + 1
         return json.loads(text[start:end])
     except Exception as e:
-        print("❌ Could not extract JSON from text:", e)
+        print("❌ Failed to extract JSON:", e)
         return None
 
 def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -221,38 +183,23 @@ def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     payload = {
         "model": MODEL,
         "temperature": 0,
-        "max_tokens": 220,
+        "max_tokens": 300,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
         ],
-        # "response_format": {"type": "json_object"},  # אם המודל תומך – מומלץ!
     }
 
-    max_attempts = 6
-    backoff = 1.5
-
-    for attempt in range(1, max_attempts + 1):
+    for attempt in range(1, 7):
         try:
-            print("=" * 60)
-            print(f"▶️ Attempt {attempt}/{max_attempts}")
-            print("➡️ URL:", OPENAI_URL)
-            print("➡️ Headers:", OA_HEADERS)
-            print("➡️ Payload:", json.dumps(payload, ensure_ascii=False)[:500], "...")
-            
-            resp = requests.post(
-                OPENAI_URL, headers=OA_HEADERS, json=payload, timeout=90
-            )
-            
+            rate_limit_sleep()
+            print("=" * 50)
+            print(f"▶️ Attempt {attempt}")
+            resp = requests.post(OPENAI_URL, headers=OA_HEADERS, json=payload, timeout=90)
             print("⬅️ Status:", resp.status_code)
-            print("⬅️ Headers:", resp.headers)
-            print("⬅️ Raw response text:", resp.text[:800], "...")
-            
         except Timeout:
-            print(f"⏱️ Timeout on attempt {attempt}")
-            sleep_s = min(backoff * 2, 30.0)
-            time.sleep(sleep_s)
-            backoff = sleep_s
+            print("⏱️ Timeout. Retrying...")
+            time.sleep(2)
             continue
         except RequestException as e:
             print("❌ Network error:", e)
@@ -260,69 +207,25 @@ def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         if resp.status_code == 200:
             try:
-                data = resp.json()
-                print("✅ JSON response parsed OK")
-            except ValueError as e:
-                print("❌ Response is not JSON:", e)
-                return None
-
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            print("➡️ Model content:", content[:500], "...")
-
-            try:
+                content = resp.json()["choices"][0]["message"]["content"]
                 return json.loads(content)
-            except json.JSONDecodeError:
-                parsed = _extract_json(content)
-                if parsed is not None:
-                    return parsed
-                print("❌ Failed to parse JSON from content")
-                return None
-
+            except Exception:
+                return _extract_json(resp.text)
         elif resp.status_code == 429:
-            retry_after = resp.headers.get("retry-after")
-            if retry_after:
-                sleep_s = float(retry_after)
-            else:
-                sleep_s = min(backoff * 2, 30.0)
-                backoff = sleep_s
-            print(f"⚠️ 429 Too Many Requests – sleeping {sleep_s:.1f}s")
-            time.sleep(sleep_s)
-            continue
-
+            print("⚠️ 429 - Sleeping 5s")
+            time.sleep(5)
         elif resp.status_code in (500, 502, 503, 504):
-            sleep_s = min(backoff * 2, 30.0)
-            backoff = sleep_s
-            print(f"⚠️ {resp.status_code} server error – sleeping {sleep_s:.1f}s")
-            time.sleep(sleep_s)
-            continue
-
+            print("⚠️ Server error - Sleeping")
+            time.sleep(3)
         else:
-            print(f"❌ OpenAI error {resp.status_code}: {resp.text[:800]}")
+            print("❌ OpenAI error:", resp.status_code, resp.text)
             return None
 
     raise RuntimeError("Request failed after retries")
-# ----- Filtering policy (pre-checks before model) -----
-def has_any_textual_signal(row: Dict[str, Any]) -> bool:
-    if row.get("caption_text"):
-        return True
-    if row.get("ocr_text"):
-        return True
-    stickers = row.get("stickers") or []
-    if isinstance(stickers, list) and len(stickers) > 0:
-        return True
-    hashtags = row.get("hashtags") or []
-    if isinstance(hashtags, list) and len(hashtags) > 0:
-        return True
-    return False
 
 def should_process(row: Dict[str, Any]) -> bool:
-    has_img = bool(row.get("image_url"))
-    has_vid = bool(row.get("video_url"))
-    if not (has_img or has_vid):
-        return False
-    return has_any_textual_signal(row)
+    return bool(row.get("image_url") or row.get("video_url"))
 
-# ----- MAIN -----
 def main():
     try:
         rows = get_raw_rows(MAX_ROWS)
@@ -336,22 +239,19 @@ def main():
         media_id = row.get("media_id") or f"row_{idx}"
         print(f"\n[{idx}/{len(rows)}] Processing: {media_id}")
 
-        # דלג אם כבר קיים בטבלת היעד
         try:
             if already_in_relevant(media_id):
-                print("↩️  Skipped (already in relevant_story).")
+                print("↩️  Skipped (already in relevant_story)")
                 set_processing_status(media_id, "skipped", None, {"reason": "already_in_relevant"})
                 continue
         except Exception as e:
             print("⚠️ relevant existence check failed:", e)
 
-        # דילוג מוקדם אם לא עומד בתנאי העיבוד
-        if not should_process(row):
-            print("↩️  Skipped (no image/video or no textual signals).")
-            set_processing_status(media_id, "skipped", None, {"reason": "no_media_or_text"})
-            continue
+        #if not should_process(row):
+           # print("↩️  Skipped (no image or video present)")
+            #set_processing_status(media_id, "skipped", None, {"reason": "no_image_or_video"})
+            #continue
 
-        # קריאה למודל
         try:
             result = call_openai_filter(row)
         except Exception as e:
@@ -360,22 +260,20 @@ def main():
             continue
 
         if not result:
-            print("↩️  No result from model.")
+            print("↩️  No result from model")
             set_processing_status(media_id, "error", "no_result_from_model")
             continue
 
-        # החלטה
-        is_rel = bool(result.get("is_relevant"))
-        if is_rel:
+        if result.get("is_relevant"):
             try:
                 upsert_relevant(row, result)
                 set_processing_status(media_id, "ok", None, {"decision": "relevant"})
-                print("✅ Upserted into relevant_story.")
+                print("✅ Inserted into relevant_story")
             except Exception as e:
-                print("❌ Insert/Upsert relevant failed:", e)
-                set_processing_status(media_id, "error", f"insert_relevant_failed: {e}")
+                print("❌ Insert/Upsert failed:", e)
+                set_processing_status(media_id, "error", str(e))
         else:
-            print("ℹ️ Marked non-relevant.")
+            print("ℹ️ Not relevant")
             set_processing_status(media_id, "non_relevant", None)
 
 if __name__ == "__main__":
