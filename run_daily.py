@@ -1,55 +1,76 @@
 import os
-import time
-import json
-import re
-import requests
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
-from requests.exceptions import RequestException, Timeout
 from urllib.parse import urlparse
-import base64
 import re, json, time, base64, mimetypes
 from io import BytesIO
-from urllib.parse import urlparse
 import requests
 from requests.exceptions import Timeout, RequestException
-from datetime import datetime, timezone
-try:
-    from PIL import Image
-    PIL_OK = True
-except Exception:
-    Image = None
-    PIL_OK = False
+
+SUPABASE_URL = "https://dgxkdenkbaphzabkcybq.supabase.co".rstrip("/")
+SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRneGtkZW5rYmFwaHphYmtjeWJxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTAxMTA2OCwiZXhwIjoyMDc0NTg3MDY4fQ.A2UCwyK2fVYTv6JUwPqv5sSoz9XvtErNcCn2B55hquk"  # 🔒 החלף ב-SERVICE_ROLE שלך
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY"
+if not OPENAI_API_KEY:
+    raise ValueError("Missing OPENAI_API_KEY")
+
+RAW_TABLE = "stories_raw"
+REL_TABLE = "relevant_story"
+MODEL = "gpt-4.1-mini"
+MAX_ROWS = 1000
+
+SUPABASE_REST = f"{SUPABASE_URL}/rest/v1"
+SB_HEADERS = {
+    "apikey": SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation",
+    "Accept": "application/json",
+}
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OA_HEADERS = {
+    "Authorization": f"Bearer {OPENAI_API_KEY}",
+    "Content-Type": "application/json",
+}
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB – תשאירי מרווח סביר
 
-def fetch_image_as_data_url(url: str) -> Optional[str]:
-    """מוריד תמונה ומחזיר data:image/...;base64,<...> לשימוש עם Vision.
-       מחזיר None אם נכשל (ואז נדלג על צילום/נשתמש ב-URL בלבד)."""
-    try:
-        r = requests.get(
-            url,
-            timeout=25,
-            headers={
-                # חלק מה-CDNs רגישים ל-UA/Referer
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-            },
-        )
-        r.raise_for_status()
-        b = r.content
-        if not b:
-            return None
-        if len(b) > MAX_IMAGE_BYTES:
-            # אפשר לצמצם/לדחוס – בשלב ראשון רק נוותר
-            dlog("Image too large for data URL", level="WARN", obj={"bytes": len(b), "url": url})
-            return None
-        mime = r.headers.get("Content-Type", "image/jpeg").split(";")[0] or "image/jpeg"
-        b64 = base64.b64encode(b).decode("ascii")
-        return f"data:{mime};base64,{b64}"
-    except Exception as e:
-        dlog("fetch_image_as_data_url failed", level="WARN", obj={"err": str(e), "url": url})
+def _normalize_brand_from_host(host: Optional[str]) -> Optional[str]:
+    if not host:
         return None
+    h = host.lower()
+    h = h.replace("www.", "")
+    parts = re.split(r"[.\-]+", h)
+    # הוציאי TLD/דומיינים ידועים
+    bad = {"com","co","il","net","org","instagram","cdninstagram","fbcdn","fna","scontent"}
+    cand = [p for p in parts if p and p not in bad]
+    return cand[0] if cand else None
+
+def _safe_brand(row: Dict[str, Any], result: Dict[str, Any]) -> str:
+    # 1) אם המודל נתן brand — נשתמש בו
+    b = (result.get("brand") or "").strip() if isinstance(result.get("brand"), str) else None
+    if b:
+        return b
+
+    # 2) ננסה להפיק מכתובות חיצוניות (urls / result.urls)
+    urls = (result.get("urls") or []) + (row.get("urls") or [])
+    for u in urls:
+        try:
+            host = urlparse(u).hostname
+        except Exception:
+            host = None
+        b2 = _normalize_brand_from_host(host)
+        if b2:
+            return b2
+
+    # 3) אפשר לנסות גם מטוקנים שהמודל מחזיר (אם שינית את ה-prompt להחזיר brand_tokens)
+    for t in (result.get("brand_tokens") or []):
+        t = str(t).strip().lower()
+        if t:
+            return t
+
+    # 4) ברירת מחדל שמכבדת ה-NOT NULL
+    return "unknown"
 
 def normalize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -94,31 +115,6 @@ def dlog(*args, level="INFO", obj=None):
 # ============== CONFIG ==============
 
 
-SUPABASE_URL = "https://dgxkdenkbaphzabkcybq.supabase.co".rstrip("/")
-SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRneGtkZW5rYmFwaHphYmtjeWJxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTAxMTA2OCwiZXhwIjoyMDc0NTg3MDY4fQ.A2UCwyK2fVYTv6JUwPqv5sSoz9XvtErNcCn2B55hquk"  # 🔒 החלף ב-SERVICE_ROLE שלך
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or "YOUR_OPENAI_API_KEY"
-if not OPENAI_API_KEY:
-    raise ValueError("Missing OPENAI_API_KEY")
-
-RAW_TABLE = "stories_raw"
-REL_TABLE = "relevant_story"
-MODEL = "gpt-4.1-mini"
-MAX_ROWS = 50
-
-SUPABASE_REST = f"{SUPABASE_URL}/rest/v1"
-SB_HEADERS = {
-    "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-    "Accept": "application/json",
-}
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-OA_HEADERS = {
-    "Authorization": f"Bearer {OPENAI_API_KEY}",
-    "Content-Type": "application/json",
-}
 # ====================================
 
 LAST_CALL_TS = 0.0
@@ -147,13 +143,6 @@ def _safe_name(row: Dict[str, Any], result: Dict[str, Any]) -> str:
             return str(c).strip()
     return "unknown"
 
-def rate_limit_sleep():
-    global LAST_CALL_TS
-    now = time.time()
-    delta = now - LAST_CALL_TS
-    if delta < MIN_INTERVAL_S:
-        time.sleep(MIN_INTERVAL_S - delta)
-    LAST_CALL_TS = time.time()
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -197,6 +186,34 @@ def set_processing_status(media_id: str, status: str, last_error: Optional[str] 
     r = sb_patch(url, params, payload)
     if r.status_code >= 400:
         print("⚠️ set_processing_status failed:", r.status_code, r.text)
+BRAND_MAP_HE_IL = {
+    "קולנטה":"kolenta","מילא":"mila","נעמה":"naama","פלטין אקספרס":"platinexpress",
+    "הום סטייל":"homestyle","חני וינברגר":"chanivainberger",
+    "מהדרין אונליין":"mehadrinonline","ריזרבד":"reserved"
+}
+COUPON_RE = re.compile(r'\b([A-Za-z0-9][A-Za-z0-9_-]{3,19})\b')
+
+def extract_pairs_from_stickers(row) -> list[dict]:
+    out, texts = [], []
+    for s in (row.get("stickers") or []):
+        t = s.get("text") if isinstance(s, dict) else None
+        if t:
+            texts.extend(re.split(r'[\r\n]+', t))
+    for line in texts:
+        line = line.strip()
+        if not line: 
+            continue
+        parts = re.split(r'\s*[-–:]\s*', line, maxsplit=1)
+        if len(parts) != 2:
+            continue
+        brand_he, right = parts
+        brand_norm = next((v for k,v in BRAND_MAP_HE_IL.items() if k in brand_he), "unknown")
+        for m in COUPON_RE.finditer(right):
+            code = m.group(1).upper()
+            if len(code) < 4:
+                continue
+            out.append({"brand": brand_norm, "code": code, "source":"sticker", "snippet": line[:140]})
+    return out
 
 def already_in_relevant(media_id: str) -> bool:
     url = f"{SUPABASE_REST}/{REL_TABLE}"
@@ -208,11 +225,31 @@ def already_in_relevant(media_id: str) -> bool:
     return bool(r.json())
 
 def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
+    # דדופ רשימת הפריטים (למקרה של כפילויות)
+    items = result.get("coupon_items") or []
+    dedup = []
+    seen = set()
+    for it in items:
+        brand = (it.get("brand") or "unknown").strip().lower()
+        code = (it.get("code") or "").strip().upper()
+        if not code:
+            continue
+        key = (brand, code)
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append({
+            "brand": brand,
+            "code": code,
+            "source": (it.get("source") or "ocr").lower(),
+            "snippet": it.get("snippet"),
+        })
+
     payload = {
         "media_id": row.get("media_id"),
         "user_id": row.get("user_id"),
-        "name": _safe_name(row, result),     # <<<<<<<<<<<<<<<<<<<<<< חשוב
-        "brand": result.get("brand"),
+        "name": _safe_name(row, result),
+        "brand": _safe_brand(row, result),     # לעמוד ב-NOT NULL הקיים
         "coupon": result.get("coupon"),
         "url": result.get("url"),
         "date": row.get("taken_at_iso"),
@@ -222,7 +259,11 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
             or (row.get("ocr_text") or "").strip()
             or None
         ),
+        # חדש: לשמור את כל הרשימות
+        "coupons": list(sorted({c.upper() for c in (result.get("coupons") or [])})),
+        "coupon_items": dedup,
     }
+
     url = f"{SUPABASE_REST}/{REL_TABLE}"
     r = sb_post(
         url, payload,
@@ -234,96 +275,130 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
     r.raise_for_status()
     return r.json()
 
+
 #############################################################
 SYSTEM_PROMPT = r"""You are filter_json_bot.
-Goal: Decide if a single Instagram media row is relevant and extract structured fields for database insertion.
 
-Two relevance modes (return TRUE if either holds):
-1) STRICT: has_collab AND (has_coupon_code OR has_url)
+Goal: Given a single Instagram media row (text + optional image), decide relevance and extract **strict, structured** fields for DB insertion.
 
-2) RELAXED-A: brand_url_present AND (brand_token_present OR marketing_intent OR price_percent_token)
-   - brand_token_present: brand/domain tokens (from any URL host, e.g. "chanivainberger", "vainberger") appear in stickers/ocr/caption/hashtags.
-   - marketing_intent: words like קופון, קוד, הנחה, מבצע, סייל, חדש, הושק, חזר/חזרה למלאי, לינק, קנייה/לרכישה, buy, shop, sale, discount, code, promo, link.
-   - price_percent_token: any currency (₪, $, €) or a percentage like 10%.
+Return ONLY JSON (no commentary). Be deterministic and conservative: if in doubt, set fields to null/empty and keep is_relevant=false.
 
-Explicit collab signals (case-insensitive):
+========================
+RELEVANCE LOGIC (OR)
+========================
+Return is_relevant=true if **any** of the following holds:
+
+A) STRICT-COLLAB: explicit collaboration signal (see list) AND (has_coupon OR has_external_url).
+B) RELAXED-BRAND: a non-Instagram external URL appears AND (brand token appears in text/hashtags/on-image OR marketing intent words OR price/percent tokens).
+C) COUPON-ONLY: a valid coupon code is detected anywhere (text, hashtags, on-image OCR/stickers), even without a URL.
+
+If none holds → is_relevant=false.
+
+========================
+CLASSIFICATION
+========================
+Set "content_type" to one of:
+- "coupon"            → at least one valid coupon code found (even without collab).
+- "collab_ad"         → explicit collab signal (#ad, sponsored, שת״פ, וכו').
+- "recommendation"    → no coupon; clear marketing/CTA intent (קנייה/לרכישה/לינק/מבצע/הנחה/SALE) or product push (חדש, הושק), OR a brand URL with brand tokens, but no coupon.
+- "organic"           → none of the above (not relevant unless A/B/C fired).
+
+If both collab and coupon exist → "coupon".
+If collab without coupon → "collab_ad".
+If URL/brand/intent without coupon/collab → "recommendation".
+
+========================
+EXPLICIT SIGNALS
+========================
+Collab signals (case-insensitive):
 Hebrew: "בשיתוף פעולה","שת״פ","שתפ","תוכן ממומן","פרסומת","חסות","בשיתוף עם","פרסומי"
-English: "paid partnership","sponsored","ad","#ad","#sponsored","#paidpartnership","partnered","collab"
-Hashtags: #ad #ads #sponsored #partner #paidpartnership #שת״פ #שתפ #בשיתוף_פעולה
+English: "paid partnership","sponsored","ad","#ad","#ads","#sponsored","#paidpartnership","partnered","collab"
 
-Coupon patterns:
-1) /(קופון|coupon|promo|voucher)\s*[:：]?\s*([A-Za-z0-9_-]{3,20})/i
-2) /\b([A-Z0-9]{4,10})\b(?:\s*(code|קוד))?/i
+Marketing intent words (case-insensitive):
+Hebrew: "קופון","קוד","הנחה","מבצע","סייל","לינק","קישור","קנייה","לרכישה","קנו","חדש","הושק","השקה","חזר","חזרה למלאי","חזר למלאי"
+English: "coupon","code","promo","discount","sale","shop","buy","link","new","launch","launched","back in stock"
+Also treat any currency sign (₪,$,€) or percent like 10% as intent=true.
 
-URL rules:
-- has_url: any valid URL or permalink.
-- brand_url_present: TRUE if at least one URL host is NOT instagram/cdninstagram/fbcdn/fna.fbcdn.
+========================
+URL RULES & BRAND
+========================
+- has_external_url: any valid URL **not** hosted on instagram/cdninstagram/fbcdn.
+- brand detection priority:
+  1) token appearing on-image (OCR/sticker) or in text/hashtags that matches a brand host token from external URLs.
+  2) else from the external URL’s hostname.
+- **Brand normalization**: from hostname take the main site token without "www." and **without TLDs** (.com, .co.il, .net, etc.). Example:
+  - "www.nike.com" → "nike"
+  - "shop.chanivainberger.co.il" → "chanivainberger"
+- If multiple candidate brands, pick the most frequent token in text/hashtags/on-image; break ties by the leftmost URL in the post.
 
-Brand:
-- Prefer brand token on-image; else use brand URL host (without 'www.'); else null.
+========================
+COUPON DETECTION (MULTI)
+========================
+Extract **all** coupon codes (from text, hashtags, stickers, OCR). Return both:
+- "coupon" → primary code (the best one)
+- "coupons" → array of unique codes (deduplicated, uppercased)
+Primary selection heuristic:
+  1) if a code is adjacent to "קופון|coupon|promo|code|קוד" (within ~15 chars) → prefer it.
+  2) else the earliest valid code in reading order.
 
-Name:
-- Influencer display name if given; else username; else null.
+Regexes (apply case-insensitive; normalize to UPPERCASE):
+1) /(קופון|coupon|promo|voucher|code|קוד)\s*[:：]?\s*([A-Za-z0-9_-]{3,20})/
+2) /\b([A-Z0-9][A-Z0-9_-]{3,19})\b(?:\s*(?:code|קוד))?/
+Hard filters to reduce false-positives:
+- Exclude strings that look like URLs, order IDs with long mixed patterns, phone numbers, obvious Hebrew words, or pure digits < 5 chars.
+- Allow letters/digits/_/- only.
+- Typical coupon length 4–12; allow up to 20 if clearly labeled by “coupon|קופון|code|קוד”.
 
-Description:
-- Concise (<=240 chars), prefer Hebrew if source is Hebrew.
+For images with **many coupons**: split and list **each code separately** in "coupons" and include per-code evidence (see output).
 
-Evidence arrays:
-- Include exact snippets (from text/stickers/hashtags/on-image text/URL list).
+========================
+EVIDENCE
+========================
+Populate evidence arrays with **exact** short snippets:
+- evidence.collab: literal phrases/hashtags that triggered collab.
+- evidence.coupon: list of objects { "code": "XXXX", "source": "caption|hashtag|ocr|sticker", "snippet": "<…>" }.
+- evidence.url: the external URLs you found (deduplicated).
 
-Input you get (JSON text + one image_url):
-- caption_text, ocr_text, stickers texts, hashtags, urls (list of strings), username,
-  has_image, has_video, permalink_present, image_url.
-
-Output (STRICT JSON only):
+========================
+OUTPUT (STRICT JSON)
+========================
 {
   "is_relevant": boolean,
-  "brand": string|null,
-  "name": string|null,
-  "coupon": string|null,
-  "url": string|null,
-  "Description": string|null,
+  "content_type": "coupon" | "collab_ad" | "recommendation" | "organic",
+  "brand": string|null,              // normalized (no TLD, no "www.")
+  "name": string|null,               // influencer display name if present; else username; else null
+  "coupon": string|null,             // primary coupon or null
+  "coupons": string[],               // all unique coupons (UPPERCASE), may be []
+  "url": string|null,                // primary external URL (non-IG) or null
+  "urls": string[],                  // all external URLs (non-IG), may be []
+  "Description": string|null,        // ≤240 chars; prefer Hebrew if source is Hebrew; concise and factual
   "evidence": {
-    "collab": [string],
-    "coupon": [string],
-    "url": [string]
+    "collab": string[],              // exact phrases/hashtags
+    "coupon": Array<{ "code": string, "source": "caption|hashtag|ocr|sticker", "snippet": string }>,
+    "url": string[]                  // external URLs (non-IG)
   }
 }
-Return ONLY valid JSON. No commentary.
+
+Constraints:
+- If no coupons, return "coupon": null and "coupons": [].
+- If no external URLs, "url": null and "urls": [].
+- Never invent brand/coupon/URL. If uncertain, use null/[] and set is_relevant=false.
+Add also:
+"coupon_items": Array<{ 
+  "brand": string|null,   // normalized latin (see brand rules), or null if unclear
+  "code": string, 
+  "source": "caption|hashtag|ocr|sticker", 
+  "snippet": string
+}>
+When multiple coupon codes appear next to brand names in OCR/stickers, return one item per brand-code pair. 
+For Hebrew brand names without a URL, normalize to simple latin tokens (examples: "קולנטה"→"kolenta", "מילא"→"mila", "נעמה"→"naama", "פלטין אקספרס"→"platinexpress", "חני וינברגר"→"chanivainberger", "מהדרין אונליין"→"mehadrinonline", "ריזרבד"→"reserved", "הום סטייל"→"homestyle").
+
 """
-
-
-def minimal_payload(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "caption_text": row.get("caption_text"),
-        "ocr_text": row.get("ocr_text"),
-        "stickers": row.get("stickers"),
-        "hashtags": row.get("hashtags"),
-        "urls": row.get("urls"),            # ← חדש
-        "username": row.get("username"),    # ← חדש
-        "has_image": bool(row.get("image_url")),
-        "has_video": bool(row.get("video_url")),
-        "permalink_present": bool(row.get("permalink")),
-        "image_url": row.get("image_url"),  # ← נוח גם כאן
-    }
 
 
 JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    m = JSON_BLOCK_RE.search(text)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-    try:
-        start = text.index("{")
-        end = text.rindex("}") + 1
-        return json.loads(text[start:end])
-    except Exception as e:
-        print("❌ Failed to extract JSON:", e)
-        return None
+
 URL_RE = re.compile(r'https?://[^\s)\]]+', re.IGNORECASE)
 
 BAD_HOSTS = {
@@ -575,7 +650,7 @@ def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for s in (row.get("stickers") or []):
         t = s.get("text") if isinstance(s, dict) else None
         if t:
-            stickers_texts.append(_short(t, 140))
+            stickers_texts.append(_short(t, 1400))
 
     hashtags = [
         ("#"+h) if not str(h).startswith("#") else str(h)
@@ -733,40 +808,6 @@ BAD_IMAGE_HOSTS = {
     "fbcdn.net","fna.fbcdn.net"
 }
 
-def is_bad_image_host(u: str) -> bool:
-    try:
-        h = (urlparse(u).hostname or "").lower()
-        if h in BAD_IMAGE_HOSTS: 
-            return True
-        return any(h.endswith("."+bh) for bh in BAD_IMAGE_HOSTS)
-    except Exception:
-        return True
-
-def fetch_image_as_data_uri(url: str, max_bytes: int = 4_000_000) -> Optional[str]:
-    try:
-        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code != 200 or not r.content:
-            return None
-        content = r.content
-        ctype = r.headers.get("Content-Type") or mimetypes.guess_type(url)[0] or "image/jpeg"
-
-        # אם גדול מדי – נכווץ רק אם PIL זמין; אחרת נשלח כמו שהוא
-        if len(content) > max_bytes and PIL_OK:
-            try:
-                im = Image.open(BytesIO(content)).convert("RGB")
-                buf = BytesIO()
-                # כיווץ ל־JPEG באיכות 70 (תוכלי להעלות/להוריד)
-                im.save(buf, format="JPEG", quality=70, optimize=True)
-                content = buf.getvalue()
-                ctype = "image/jpeg"
-            except Exception:
-                pass
-
-        b64 = base64.b64encode(content).decode("ascii")
-        return f"data:{ctype};base64,{b64}"
-    except Exception:
-        return None
-
 def _short(s, n=1000):
     try:
         s = str(s)
@@ -775,19 +816,6 @@ def _short(s, n=1000):
     except Exception:
         return s
 
-def should_process(row: Dict[str, Any]) -> bool:
-    return bool(row.get("image_url") or row.get("video_url"))
-def brand_tokens_from_urls(urls: List[str]) -> List[str]:
-    toks = []
-    for u in urls:
-        h = host_of(u) or ""
-        h = h.lower().replace("www.", "")
-        # דוגמה פשוטה: הפרדה לפי נקודות ומקפים
-        parts = re.split(r"[\.\-]+", h)
-        for p in parts:
-            if len(p) >= 4 and p not in ("instagram","cdninstagram","fbcdn","fna","com","co","il"):
-                toks.append(p)
-    return sorted(set(toks))
 
 def main():
     try:
@@ -821,31 +849,62 @@ def main():
         except Exception as e:
             print("⚠️ relevant existence check failed:", e)
 
-        #if not should_process(row):
-           # print("↩️  Skipped (no image or video present)")
-            #set_processing_status(media_id, "skipped", None, {"reason": "no_image_or_video"})
-            #continue
-
         try:
-            result = call_openai_filter(row)
+           result = call_openai_filter(row)
         except Exception as e:
-            print("❌ OpenAI call failed:", e)
-            set_processing_status(media_id, "error", str(e))
-            continue
+           print("❌ OpenAI call failed:", e)
+           set_processing_status(media_id, "error", str(e))
+           continue
+
+        # --- Fallback מקומי מהסטיקרים (גם אם המודל החזיר משהו וגם אם לא) ---
+        local_items = extract_pairs_from_stickers(row)
 
         if not result:
-            print("↩️  No result from model")
-            set_processing_status(media_id, "error", "no_result_from_model")
-            continue
+           result = {}
+
+# אם המודל לא סימן רלוונטי אבל נמצאו קופונים מקומית -> כן רלוונטי
+        if not bool(result.get("is_relevant")) and local_items:
+           result["is_relevant"] = True
+           result["content_type"] = "coupon"
+
+# מזג/דדופ של פריטי הקופונים
+        merged_items = (result.get("coupon_items") or []) + local_items
+        if merged_items:
+           seen = set(); dedup = []
+           for it in merged_items:
+               brand = (it.get("brand") or "unknown").strip().lower()
+               code  = (it.get("code") or "").strip().upper()
+               if not code:
+                           continue
+               key = (brand, code)
+               if key in seen:
+                           continue
+               seen.add(key)
+               dedup.append({
+                             "brand": brand,
+                             "code": code,
+                             "source": (it.get("source") or "ocr").lower(),
+                             "snippet": it.get("snippet")
+                            })
+               result["coupon_items"] = dedup
+               result["coupons"] = sorted({it["code"] for it in dedup})
+    # אם אין קוד ראשי – קחי את הראשון
+               if not result.get("coupon"):
+                   result["coupon"] = result["coupons"][0]
+
+# כלל ביטחון: אם יש קופונים כלשהם -> רלוונטי
+        if not result.get("is_relevant") and (result.get("coupons") or result.get("coupon_items")):
+            result["is_relevant"] = True
+            result["content_type"] = "coupon"
 
         if result.get("is_relevant"):
             try:
-                upsert_relevant(row, result)
-                set_processing_status(media_id, "ok", None, {"decision": "relevant"})
-                print("✅ Inserted into relevant_story")
+               upsert_relevant(row, result)
+               set_processing_status(media_id, "ok", None, {"decision": "relevant"})
+               print("✅ Inserted into relevant_story")
             except Exception as e:
-                print("❌ Insert/Upsert failed:", e)
-                set_processing_status(media_id, "error", str(e))
+               print("❌ Insert/Upsert failed:", e)
+               set_processing_status(media_id, "error", str(e))
         else:
             print("ℹ️ Not relevant")
             set_processing_status(media_id, "non_relevant", None)
