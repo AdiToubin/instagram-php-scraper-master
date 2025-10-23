@@ -6,6 +6,7 @@
 // Optional: IG_WWW_CLAIM, IG_DEBUG=1 (dump story_debug.json)
 declare(strict_types=1);
 
+
 require __DIR__ . '/vendor/autoload.php';
 
 use GuzzleHttp\Client;
@@ -192,7 +193,7 @@ $client=new Client([
 
 /* === SUPABASE: יצירת לקוח פעם אחת לפי env === */
 $supaUrl   = rtrim(envs('SUPABASE_URL',''), '/');
-$supaKey   = envs('SUPABASE_KEY','');
+$supaKey   = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRneGtkZW5rYmFwaHphYmtjeWJxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTAxMTA2OCwiZXhwIjoyMDc0NTg3MDY4fQ.A2UCwyK2fVYTv6JUwPqv5sSoz9XvtErNcCn2B55hquk";
 $supaTable = envs('SUPABASE_TABLE','stories_raw');
 $sbClient  = null;
 
@@ -210,6 +211,8 @@ if ($supaUrl!=='' && $supaKey!=='') {
   ]);
 } else {
   fwrite(STDERR, "WARN: SUPABASE_URL / SUPABASE_KEY not set – DB insert disabled.\n");
+  fwrite(STDERR, "DEBUG URL={$supaUrl} KEYLEN=".strlen($supaKey)." CLIENT?=".($sbClient?'yes':'no')."\n");
+
 }
 
 /* === SUPABASE: פונקציה ששומרת סטורי יחיד RAW === */
