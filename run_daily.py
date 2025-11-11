@@ -333,6 +333,7 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
         # חדש: לשמור את כל הרשימות
         "coupons": list(sorted({c.upper() for c in (result.get("coupons") or [])})),
         "coupon_items": dedup,
+        "category": result.get("category") or "other",
     }
 
     url = f"{SUPABASE_REST}/{REL_TABLE}"
@@ -349,70 +350,101 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
 
 
 #############################################################
-SYSTEM_PROMPT = r"""
-You are an expert Instagram media analyzer.  
-You receive text + optional image and must output a single valid JSON object
-representing a commercial Instagram post.
+# ============== PROMPT משופר ==============
+SYSTEM_PROMPT = """You are an expert Instagram marketing post analyzer with vision capabilities.
+Your job is to analyze posts and detect commercial intent: brands, coupon codes, affiliate links, and product categories.
 
-Your goal is to **accurately detect real coupon codes, real brand names, and real store URLs**.
-Avoid false positives such as tracking parameters or system words.
+## YOUR MAIN TASKS:
 
-========================
-WHAT TO DETECT
-========================
-1. **Coupon codes**
-   - A valid coupon is a short token (3–15 chars) of letters/numbers/hyphens/underscores.
-   - Usually appears near keywords like: 
-     קוד, קופון, coupon, code, promo, discount, מבצע, הנחה.
-   - Also appears alone in uppercase (e.g., SIVAN10, PROHAIRPLUS).
-   - **Ignore any of the following technical words:**
-     UTM_SOURCE, UTM_MEDIUM, UTM_CAMPAIGN, UTM_CONTENT, UTM_TERM, FBCLID, COLLECTIONS,
-     SOCIAL, INSTAGRAM, PAGE, PRODUCT, CATEGORY, ITEM, LINK, HTTPS, HTTP, WWW, COM, IL.
-   - From all candidates, keep only those that look like a human coupon (brand-related, short, meaningful).
-   - Prefer codes with letters + digits (e.g., "CHANI10", "SIVAN15").
-   - The main code goes in "coupon"; all unique ones go in "coupons" array.
+### 1. DETECT COUPON CODES
+A coupon code is a short token (3-15 characters) of letters/numbers/hyphens that appears near words like:
+- Hebrew: קוד, קופון, הנחה, מבצע, סייל, קוד קופון
+- English: code, coupon, promo, discount, sale
 
-2. **Brand detection**
-   - Use the external URL domain or visible text/logo (e.g., prohairplus.co.il → brand="prohairplus").
-   - If brand is written in Hebrew, map to Latin form:
-     קולנטה→kolenta, מילא→mila, נעמה→naama, פלטין אקספרס→platinexpress,
-     חני וינברגר→chanivainberger, מהדרין אונליין→mehadrinonline,
-     ריזרבד→reserved, הום סטייל→homestyle.
-   - If brand name appears in coupon (e.g., "PROHAIRPLUS") – assign it to that brand.
+**Rules:**
+- Ignore brand names that look like codes (e.g., "PROHAIRPLUS" is a brand, not a code)
+- The main coupon goes in `"coupon"`, all unique ones in `"coupons"` array
+- Extract all visible codes from text, stickers, or image
 
-3. **External URLs**
-   - Only keep non-Instagram, non-Facebook links.
-   - Example: https://www.prohairplus.co.il/... is valid.
-   - Do not extract UTM parameters as separate coupons.
+### 2. DETECT AFFILIATE/REFERRAL LINKS
+Look for URLs containing: ref, aff, share, linktr.ee, bit.ly, utm_source, or any promotional link.
 
-4. **Relevance**
-   - "is_relevant"=true only if at least one of:
-       • coupon code found
-       • explicit marketing intent (מבצע, קוד קופון, הנחה)
-       • external store URL with product or collection
-       • collaboration marker (#ad, sponsored, בשיתוף)
-   - Be conservative: if not sure — set is_relevant=false.
+If there's a link but no coupon:
+- Set: `is_relevant: true`, `content_type: "collab_ad"`, `coupon: null`
+- Write Hebrew description explaining the influencer shares a purchase link
 
-5. **Description**
-   - Create a short factual summary (≤200 chars, Hebrew preferred).
-   - Example: "קופון הנחה למוצרי PROHAIRPLUS לשיער מתולתל".
+### 3. IDENTIFY THE BRAND
+Extract the brand from:
+- Text mentions (Hebrew or English)
+- URL domain
+- Visual logo in image
+- Known brand products in image
 
-========================
-OUTPUT JSON SCHEMA
-========================
+**Hebrew to English mapping:**
+קולנטה→kolenta, מילא→mila, נעמה→naama, ריזרבד→reserved, 
+פלטין אקספרס→platinexpress, הום סטייל→homestyle
+
+If unknown, use "unknown".
+
+### 4. CLASSIFY CATEGORY (CRITICAL!)
+
+**You must always return exactly ONE of these 6 categories based on the PRODUCT TYPE:**
+
+- **fashion** - Clothing, apparel, shoes, accessories, fashion items
+  Examples: shirts, dresses, pants, jeans, shoes, bags, jewelry, watches
+
+- **beauty** - Cosmetics, skincare, haircare, perfumes, makeup
+  Examples: shampoo, cream, lipstick, serum, hair products, face masks
+
+- **home** - Furniture, home decor, kitchenware, household items
+  Examples: tables, chairs, sofas, beds, kitchen tools, decorations
+
+- **food** - Food, beverages, recipes, restaurants
+  Examples: chocolate, coffee, wine, snacks, meals, groceries
+
+- **tech** - Electronics, gadgets, apps, software, phones
+  Examples: smartphones, computers, headphones, apps, websites
+
+- **other** - Everything else (toys, sports, services, etc.)
+
+**IMPORTANT INSTRUCTIONS FOR CATEGORY:**
+1. Look at the IMAGE first - what product do you see?
+2. Read the text - what is being sold/promoted?
+3. Check the brand - is it a known fashion/beauty/home brand?
+4. Use your general knowledge - you know what RESERVED, CRAZYLINE are (fashion)
+5. You know what PROHAIRPLUS is (beauty/hair products)
+6. **DO NOT return null or empty category - ALWAYS choose one**
+7. When in doubt between two categories, prefer the more specific one
+8. If you're unsure, default to "other"
+
+### 5. WRITE HEBREW DESCRIPTION (MANDATORY)
+Write a concise Hebrew marketing summary (max 200 chars) that explains:
+- What's being offered (coupon/link/collaboration)
+- Which brand
+- What type of product
+
+Examples:
+- "קוד SIVAN10 מעניק 10% הנחה על מוצרי שיער של PROHAIRPLUS"
+- "לינק קנייה לפריטי אופנה חדשים מ-RESERVED"
+- "שיתוף פעולה עם מותג רהיטים HomeStyle - קולקציה חדשה"
+
+---
+
+## OUTPUT JSON SCHEMA (STRICT):
+
 {
   "is_relevant": boolean,
   "content_type": "coupon" | "collab_ad" | "recommendation" | "organic",
-  "brand": string | null,
+  "brand": string,
   "coupon": string | null,
   "coupons": string[],
   "url": string | null,
   "urls": string[],
-  "Description": string | null,
+  "Description": string,
   "category": "fashion" | "beauty" | "home" | "food" | "tech" | "other",
   "coupon_items": [
     {
-      "brand": string | null,
+      "brand": string,
       "code": string,
       "source": "caption|hashtag|ocr|sticker|image|url",
       "snippet": string
@@ -420,24 +452,18 @@ OUTPUT JSON SCHEMA
   ]
 }
 
-========================
-CATEGORY RULES
-========================
-- fashion → clothes, style, boutique, חולצה, חצאית, CRAZYLINE
-- beauty → hair, shampoo, cream, טיפוח, קרם, PROHAIRPLUS
-- food → recipe, בישול, מתכון, שוקולד
-- home → בית, רהיט, מטבח, הום סטייל
-- tech → גאדג'ט, אתר, אפליקציה
-- other → anything else
+---
 
-========================
-RULES
-========================
-- Return ONLY valid JSON (no commentary).
-- Never invent coupons or brands.
-- Ignore UTM and social tracking parameters.
-- Prefer Hebrew in Description.
-- Be deterministic and consistent.
+## CRITICAL RULES:
+1. **Always return valid JSON only** (no markdown, no explanations)
+2. **category is MANDATORY** - never return null/empty
+3. **Use your knowledge** - you know what products belong to which category
+4. **Look at the image** - visual content is key for category detection
+5. **Description must be in Hebrew** - clear and concise
+6. Never mistake a brand name for a coupon code
+7. If text is unclear, rely on visual cues from the image
+
+Remember: You're smart! Use your training to understand what category a product belongs to. Don't leave it empty!
 """
 
 
@@ -550,6 +576,48 @@ def has_marketing_words(text: str) -> bool:
     ]
     perc_or_price = any(sym in t for sym in ["%", "₪", "$", "€"])
     return perc_or_price or any(x in t for x in heb_terms + eng_terms)
+
+
+def infer_category_from_text_or_image(row, result=None):
+    text_fields = " ".join(
+        [
+            str(row.get("caption_text") or ""),
+            str(row.get("ocr_text") or ""),
+            str(row.get("description") or ""),
+            str(row.get("brand") or ""),
+            " ".join(row.get("hashtags") or []),
+        ]
+    ).lower()
+
+    mapping = {
+        "fashion": [
+            "בגד",
+            "בגדים",
+            "ביגוד",
+            "חולצה",
+            "שמלה",
+            "מכנס",
+            "ג'ינס",
+            "טרנינג",
+            "פיגמה",
+            "פיג'מה",
+            "פיג’מה",
+            "הלבשה",
+            "תחתונה",
+            "אופנה",
+            "reserved",
+            "crazyline",
+        ],
+        "beauty": ["שיער", "קרם", "שפתון", "טיפוח", "מסכה", "פרופילוס", "prohairplus"],
+        "home": ["רהיט", "הום", "בית", "מטבח", "עיצוב", "מיטה", "כורסה"],
+        "food": ["אוכל", "שוקולד", "קפה", "בישול", "מתכון", "מאפה"],
+        "tech": ["אתר", "אפליקציה", "מחשב", "טלפון", "גאדג", "טכנולוג"],
+    }
+
+    for cat, kws in mapping.items():
+        if any(k in text_fields for k in kws):
+            return cat
+    return "other"
 
 
 def call_openai_filter(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1053,6 +1121,15 @@ def main():
             set_processing_status(media_id, "error", str(e))
             continue
 
+        # ✅ הוספה: fallback אם הקטגוריה חסרה
+        if result:
+            if not result.get("category") or result.get("category") in (
+                None,
+                "",
+                "null",
+            ):
+                result["category"] = infer_category_from_text_or_image(row, result)
+
         # --- Fallback מקומי מהסטיקרים (גם אם המודל החזיר משהו וגם אם לא) ---
         local_items = extract_pairs_from_stickers(row)
 
@@ -1100,7 +1177,17 @@ def main():
             result["content_type"] = "coupon"
 
         if result.get("is_relevant"):
+            # 🧹 אם מדובר בפרסום שיתופי (collab_ad) ואין קוד אמיתי – ננקה קופונים
+            if result.get("content_type") == "collab_ad":
+                result["coupon"] = None
+                result["coupons"] = []
+                result["coupon_items"] = []
             try:
+                cat = (result.get("category") or "").strip().lower()
+                if cat in ("", "null", "none", "undefined"):
+                    cat = infer_category_from_text_or_image(row, result)
+                result["category"] = cat or "other"
+
                 upsert_relevant(row, result)
                 set_processing_status(media_id, "ok", None, {"decision": "relevant"})
                 print("✅ Inserted into relevant_story")
