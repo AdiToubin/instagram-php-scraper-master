@@ -1,0 +1,9 @@
+# List of influencer usernames (one per line)
+# Lines starting with # are comments and will be ignored
+
+# Example influencers:
+
+sivanazriel123
+danagrotsky
+corringideon
+ruchy_asher
