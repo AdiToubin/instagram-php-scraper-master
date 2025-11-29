@@ -148,28 +148,32 @@ def _safe_name(row: Dict[str, Any], result: Dict[str, Any]) -> str:
     """
     מחזירה תמיד name לא-ריק:
     1) מהמודל אם קיים
-    2) מהשורה ברמות שונות
-    3) fallback ל-user_id
-    4) ואם אין – "unknown"
+    2) מהשורה ברמות שונות (username מועדף!)
+    3) fallback ל-"unknown" (לעולם לא user_id!)
     """
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    
+    # נסה למצוא username תחילה (זה השם האמיתי!)
     candidates = [
         result.get("name"),
-        row.get("name"),
-        row.get("username"),
-        payload.get("name"),
+        row.get("username"),  # העברנו את username למקום שני - זה הכי חשוב!
         payload.get("username"),
         (
             payload.get("owner", {}).get("username")
             if isinstance(payload.get("owner"), dict)
             else None
         ),
-        str(row.get("user_id") or "").strip(),
+        row.get("name"),
+        payload.get("name"),
+        # הסרנו לגמרי את user_id מהרשימה - לעולם לא נשתמש במספר בתור שם!
         "unknown",
     ]
+    
     for c in candidates:
-        if c and str(c).strip():
+        if c and str(c).strip() and not str(c).strip().isdigit():
+            # וידוא שזה לא רק מספרים (למקרה שמישהו שם user_id בשדה name)
             return str(c).strip()
+    
     return "unknown"
 
 
