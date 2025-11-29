@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
-import re, json, time, base64, mimetypes
+import re, json, time, base64, mimetypes, glob
 from io import BytesIO
 import requests
 from requests.exceptions import Timeout, RequestException
@@ -17,7 +17,8 @@ if not OPENAI_API_KEY:
 
 RAW_TABLE = "stories_raw"
 REL_TABLE = "relevant_story"
-MODEL = "gpt-4.1-mini"
+REC_TABLE = "story_recommendations"
+MODEL = "gpt-4o-mini"
 MAX_ROWS = 1000
 
 SUPABASE_REST = f"{SUPABASE_URL}/rest/v1"
@@ -221,6 +222,35 @@ def get_raw_rows(limit: int = MAX_ROWS) -> List[Dict[str, Any]]:
     return r.json()
 
 
+def upsert_recommendation(row: Dict[str, Any], result: Dict[str, Any]):
+    """
+    Saves 'recommendation' stories to a separate table.
+    """
+    payload = {
+        "media_id": row.get("media_id"),
+        "user_id": row.get("user_id"),
+        "name": _safe_name(row, result),
+        "brand": _safe_brand(row, result),
+        "date": row.get("taken_at_iso"),
+        "Description": result.get("Description"),
+        "category": result.get("category") or "other",
+        # Optional fields that might be empty for recommendations
+        "url": result.get("url"),
+    }
+
+    url = f"{SUPABASE_REST}/{REC_TABLE}"
+    r = sb_post(
+        url,
+        payload,
+        prefer="return=representation,resolution=merge-duplicates",
+        params={"on_conflict": "media_id"},
+    )
+    if r.status_code >= 400:
+        print(f"❌ upsert recommendation failed: {r.status_code} {r.text}")
+    r.raise_for_status()
+    return r.json()
+
+
 def set_processing_status(
     media_id: str,
     status: str,
@@ -350,92 +380,68 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
     if r.status_code >= 400:
         print("❌ upsert relevant failed:", r.status_code, r.text)
     r.raise_for_status()
-    return r.json()
-
 
 #############################################################
-# ============== PROMPT משופר ==============
-SYSTEM_PROMPT = """You are an expert Instagram marketing post analyzer with vision capabilities.
-Your job is to analyze posts and detect commercial intent: brands, coupon codes, affiliate links, and product categories.
+# ============== PROMPT משופר (STRICT MODE) ==============
+SYSTEM_PROMPT = """You are an expert Instagram marketing post analyzer.
+Your ONLY job is to detect **ACTIVE COMMERCIAL OFFERS**: Coupon Codes and Affiliate Links.
+**You must output your response in valid JSON format.**
 
-## YOUR MAIN TASKS:
+## YOUR MISSION
+You must filter out all "organic" content.
+If a story is just a recommendation, a picture of food, or a life update -> IT IS NOT RELEVANT.
+**ONLY** mark as relevant if there is a clear way for the user to save money (Coupon) or buy a specific product via link (Link).
 
-### 1. DETECT COUPON CODES
-A coupon code is a short token (3-15 characters) of letters/numbers/hyphens that appears near words like:
-- Hebrew: קוד, קופון, הנחה, מבצע, סייל, קוד קופון
-- English: code, coupon, promo, discount, sale
+## CLASSIFICATION RULES (STRICT)
+
+### 1. COUPON (High Priority)
+- **Criteria:** Visible code (e.g., "SAVE20", "SIVAN10") + keywords like "code", "coupon", "discount".
+- **Action:** Set `is_relevant: true`, `content_type: "coupon"`.
+
+### 2. COLLAB_AD (Link/Share)
+- **Criteria:** A "Link" sticker or URL is present AND there is clear commercial intent (e.g., "Buy here", "Link in bio", "Share", "Affiliate").
+- **Action:** Set `is_relevant: true`, `content_type: "collab_ad"`.
+
+### 3. RECOMMENDATION (New Table)
+- **Criteria:** Brand mention or product display WITHOUT a specific link or coupon.
+- **Action:** Set `is_relevant: true`, `content_type: "recommendation"`.
+
+### 4. ORGANIC (Everything Else)
+- **Criteria:**
+  - Life updates, memes, scenery.
+  - No brand mention, no product focus.
+- **Action:** Set `is_relevant: false`, `content_type: "organic"`.
+
+## CRITICAL INSTRUCTIONS
+1. **Default to `is_relevant: false`**.
+2. **Recommendations ARE relevant** but must be classified as "recommendation".
+3. **Brand mentions alone** -> "recommendation".
+4. **Brand + Link/Coupon** -> "collab_ad" or "coupon".
+
+### 5. CLASSIFY CATEGORY (Mandatory if Relevant)
+If relevant, choose one: **fashion, beauty, home, food, tech, other**.
+
+### 6. WRITE HEBREW DESCRIPTION (MANDATORY & HIGH QUALITY)
+Write a **clear, marketing-oriented** Hebrew summary (max 200 chars).
+
+**Templates:**
+
+**For Coupon:**
+"קוד [CODE] מקנה [DISCOUNT] הנחה באתר [BRAND] על [PRODUCT_CATEGORY]"
+
+**For Link (Collab Ad):**
+"לינק לרכישת [PRODUCT_NAME] של מותג [BRAND] - [EXTRA_INFO]"
+
+**For Recommendation:**
+"המלצה על [PRODUCT_NAME] של מותג [BRAND]"
 
 **Rules:**
-- Ignore brand names that look like codes (e.g., "PROHAIRPLUS" is a brand, not a code)
-- The main coupon goes in `"coupon"`, all unique ones in `"coupons"` array
-- Extract all visible codes from text, stickers, or image
-
-### 2. DETECT AFFILIATE/REFERRAL LINKS
-Look for URLs containing: ref, aff, share, linktr.ee, bit.ly, utm_source, or any promotional link.
-
-If there's a link but no coupon:
-- Set: `is_relevant: true`, `content_type: "collab_ad"`, `coupon: null`
-- Write Hebrew description explaining the influencer shares a purchase link
-
-### 3. IDENTIFY THE BRAND
-Extract the brand from:
-- Text mentions (Hebrew or English)
-- URL domain
-- Visual logo in image
-- Known brand products in image
-
-**Hebrew to English mapping:**
-קולנטה→kolenta, מילא→mila, נעמה→naama, ריזרבד→reserved, 
-פלטין אקספרס→platinexpress, הום סטייל→homestyle
-
-If unknown, use "unknown".
-
-### 4. CLASSIFY CATEGORY (CRITICAL!)
-
-**You must always return exactly ONE of these 6 categories based on the PRODUCT TYPE:**
-
-- **fashion** - Clothing, apparel, shoes, accessories, fashion items
-  Examples: shirts, dresses, pants, jeans, shoes, bags, jewelry, watches
-
-- **beauty** - Cosmetics, skincare, haircare, perfumes, makeup
-  Examples: shampoo, cream, lipstick, serum, hair products, face masks
-
-- **home** - Furniture, home decor, kitchenware, household items
-  Examples: tables, chairs, sofas, beds, kitchen tools, decorations
-
-- **food** - Food, beverages, recipes, restaurants
-  Examples: chocolate, coffee, wine, snacks, meals, groceries
-
-- **tech** - Electronics, gadgets, apps, software, phones
-  Examples: smartphones, computers, headphones, apps, websites
-
-- **other** - Everything else (toys, sports, services, etc.)
-
-**IMPORTANT INSTRUCTIONS FOR CATEGORY:**
-1. Look at the IMAGE first - what product do you see?
-2. Read the text - what is being sold/promoted?
-3. Check the brand - is it a known fashion/beauty/home brand?
-4. Use your general knowledge - you know what RESERVED, CRAZYLINE are (fashion)
-5. You know what PROHAIRPLUS is (beauty/hair products)
-6. **DO NOT return null or empty category - ALWAYS choose one**
-7. When in doubt between two categories, prefer the more specific one
-8. If you're unsure, default to "other"
-
-### 5. WRITE HEBREW DESCRIPTION (MANDATORY)
-Write a concise Hebrew marketing summary (max 200 chars) that explains:
-- What's being offered (coupon/link/collaboration)
-- Which brand
-- What type of product
-
-Examples:
-- "קוד SIVAN10 מעניק 10% הנחה על מוצרי שיער של PROHAIRPLUS"
-- "לינק קנייה לפריטי אופנה חדשים מ-RESERVED"
-- "שיתוף פעולה עם מותג רהיטים HomeStyle - קולקציה חדשה"
+- Be concise but descriptive.
+- No emojis in the description text itself.
 
 ---
 
-## OUTPUT JSON SCHEMA (STRICT):
-
+## OUTPUT JSON SCHEMA:
 {
   "is_relevant": boolean,
   "content_type": "coupon" | "collab_ad" | "recommendation" | "organic",
@@ -446,28 +452,8 @@ Examples:
   "urls": string[],
   "Description": string,
   "category": "fashion" | "beauty" | "home" | "food" | "tech" | "other",
-  "coupon_items": [
-    {
-      "brand": string,
-      "code": string,
-      "source": "caption|hashtag|ocr|sticker|image|url",
-      "snippet": string
-    }
-  ]
+  "coupon_items": []
 }
-
----
-
-## CRITICAL RULES:
-1. **Always return valid JSON only** (no markdown, no explanations)
-2. **category is MANDATORY** - never return null/empty
-3. **Use your knowledge** - you know what products belong to which category
-4. **Look at the image** - visual content is key for category detection
-5. **Description must be in Hebrew** - clear and concise
-6. Never mistake a brand name for a coupon code
-7. If text is unclear, rely on visual cues from the image
-
-Remember: You're smart! Use your training to understand what category a product belongs to. Don't leave it empty!
 """
 
 
@@ -1079,7 +1065,47 @@ def _short(s, n=1000):
         return s
 
 
+
+def load_id_to_username_map():
+    """
+    Loads the latest user_ids_*.json file to create a mapping of user_id -> username.
+    This ensures we use the correct influencer name even if the story data is missing it.
+    """
+    try:
+        files = glob.glob("user_ids_*.json")
+        if not files:
+            print("⚠️ No user_ids_*.json files found for username mapping.")
+            return {}
+        
+        latest_file = max(files, key=os.path.getctime)
+        print(f"📂 Loading username mapping from: {latest_file}")
+        
+        with open(latest_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Map user_id -> username
+            mapping = {}
+            # Handle both list and dict with "results" key
+            items = data.get("results", []) if isinstance(data, dict) else data
+            
+            if isinstance(items, list):
+                for u in items:
+                    if isinstance(u, dict):
+                        uid = str(u.get("user_id") or "")
+                        uname = u.get("username")
+                        if uid and uname:
+                            mapping[uid] = uname
+            
+            print(f"✅ Loaded {len(mapping)} username mappings.")
+            return mapping
+    except Exception as e:
+        print(f"❌ Error loading username map: {e}")
+        return {}
+
+
 def main():
+    # Load username mapping first
+    id_map = load_id_to_username_map()
+
     try:
         rows = get_raw_rows(MAX_ROWS)
     except Exception as e:
@@ -1097,6 +1123,22 @@ def main():
         print(f"\n[{idx}/{len(rows)}] Processing: {media_id}")
         # פריסת payload -> תמלא image_url/urls/stickers וכו' אם חסר
         row = normalize_row(row)
+
+        # ✅ FIX: Ensure username is correct using local map
+        # This overrides any missing or incorrect username from the raw data
+        uid = str(row.get("user_id") or "")
+        if uid and uid in id_map:
+            original_name = row.get("username")
+            mapped_name = id_map[uid]
+            if original_name != mapped_name:
+                # print(f"🔄 Correcting username: {original_name} -> {mapped_name}")
+                row["username"] = mapped_name
+                # Update payload too if it exists
+                if isinstance(row.get("payload"), dict):
+                    row["payload"]["username"] = mapped_name
+        
+        # DEBUG: Print final username to be used
+        print(f"👤 Processing User: {row.get('username')} (ID: {uid})")
         dlog("After normalize_row keys:", obj=list(row.keys()))
         dlog(
             "Quick check fields:",
@@ -1180,21 +1222,47 @@ def main():
             result["is_relevant"] = True
             result["content_type"] = "coupon"
 
+        # STRICT FILTERING:
+        # If content_type is "recommendation", we save to a DIFFERENT table.
+        # If "coupon" or "collab_ad", we save to relevant_story.
+        
+        ctype = result.get("content_type")
+        
         if result.get("is_relevant"):
-            # 🧹 אם מדובר בפרסום שיתופי (collab_ad) ואין קוד אמיתי – ננקה קופונים
-            if result.get("content_type") == "collab_ad":
-                result["coupon"] = None
-                result["coupons"] = []
-                result["coupon_items"] = []
             try:
                 cat = (result.get("category") or "").strip().lower()
                 if cat in ("", "null", "none", "undefined"):
                     cat = infer_category_from_text_or_image(row, result)
                 result["category"] = cat or "other"
 
-                upsert_relevant(row, result)
-                set_processing_status(media_id, "ok", None, {"decision": "relevant"})
-                print("✅ Inserted into relevant_story")
+                # DEBUG: Print description
+                desc = result.get("Description")
+                print(f"📝 Description found: {desc}")
+                print(f"🏷️ Content Type: {ctype}")
+
+                if ctype == "recommendation":
+                    # Save to recommendations table
+                    upsert_recommendation(row, result)
+                    set_processing_status(media_id, "ok", None, {"decision": "recommendation"})
+                    print("✅ Inserted into story_recommendations")
+                
+                elif ctype in ("coupon", "collab_ad"):
+                    # Save to relevant_story table
+                    # Clean up fields if needed
+                    if ctype == "collab_ad":
+                        result["coupon"] = None
+                        result["coupons"] = []
+                        result["coupon_items"] = []
+                    
+                    upsert_relevant(row, result)
+                    set_processing_status(media_id, "ok", None, {"decision": "relevant"})
+                    print("✅ Inserted into relevant_story")
+                
+                else:
+                    # Should not happen if prompt is obeyed, but just in case
+                    print(f"ℹ️ Unknown relevant type '{ctype}' - skipping")
+                    set_processing_status(media_id, "skipped", None, {"reason": "unknown_type"})
+
             except Exception as e:
                 print("❌ Insert/Upsert failed:", e)
                 set_processing_status(media_id, "error", str(e))
