@@ -1,0 +1,152 @@
+[2025-11-29 21:36:14] [INFO] Configuration:
+[2025-11-29 21:36:14] [INFO]   JSON file:     .\user_ids_2025-11-29_192213.json
+[2025-11-29 21:36:14] [INFO]   Delay range:   2-5 seconds
+[2025-11-29 21:36:14] [INFO]   Homepage freq: Every 3 influencers
+[2025-11-29 21:36:14] [INFO]   Dry run:       True
+[2025-11-29 21:36:14] [INFO]   Log file:      logs/stories_20251129_213614.log
+[2025-11-29 21:36:14] [INFO] 
+[2025-11-29 21:36:14] [INFO] ============================================================
+[2025-11-29 21:36:14] [INFO] 🚀 Starting Daily Stories Automation
+[2025-11-29 21:36:14] [INFO] ============================================================
+[2025-11-29 21:36:14] [INFO] Loading influencers from: .\user_ids_2025-11-29_192213.json
+[2025-11-29 21:36:14] [SUCCESS] Loaded 49 influencers
+[2025-11-29 21:36:14] [INFO] Skipping 1 private accounts
+[2025-11-29 21:36:14] [INFO] Processing 48 public accounts in random order
+[2025-11-29 21:36:14] [INFO] 
+--- Progress: 1/48 ---
+[2025-11-29 21:36:14] [INFO] 📸 Fetching stories for @sara_basan_makeup (ID: 43098904440)
+[2025-11-29 21:36:14] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:14] [DEBUG] ⏳ Waiting 3.9s before next action...
+[2025-11-29 21:36:18] [INFO] 
+--- Progress: 2/48 ---
+[2025-11-29 21:36:18] [INFO] 📸 Fetching stories for @danagrotsky (ID: 29131423)
+[2025-11-29 21:36:18] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:18] [DEBUG] ⏳ Waiting 2.5s before next action...
+[2025-11-29 21:36:20] [INFO] 
+--- Progress: 3/48 ---
+[2025-11-29 21:36:20] [INFO] 📸 Fetching stories for @yaelzien (ID: 38567229589)
+[2025-11-29 21:36:20] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:20] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:36:20] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:36:20] [DEBUG] ⏳ Waiting 2.7s before next action...
+[2025-11-29 21:36:23] [INFO] 
+--- Progress: 4/48 ---
+[2025-11-29 21:36:23] [INFO] 📸 Fetching stories for @chavi_heifetz (ID: 24973107)
+[2025-11-29 21:36:23] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:23] [DEBUG] ⏳ Waiting 3.6s before next action...
+[2025-11-29 21:36:26] [INFO] 
+--- Progress: 5/48 ---
+[2025-11-29 21:36:26] [INFO] 📸 Fetching stories for @danitgreenberg (ID: 26452000)
+[2025-11-29 21:36:26] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:26] [DEBUG] ⏳ Waiting 4.9s before next action...
+[2025-11-29 21:36:31] [INFO] 
+--- Progress: 6/48 ---
+[2025-11-29 21:36:31] [INFO] 📸 Fetching stories for @chani_vainberger (ID: 1273615238)
+[2025-11-29 21:36:31] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:31] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:36:31] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:36:31] [DEBUG] ⏳ Waiting 4.9s before next action...
+[2025-11-29 21:36:36] [INFO] 
+--- Progress: 7/48 ---
+[2025-11-29 21:36:36] [INFO] 📸 Fetching stories for @halperinnana (ID: 367022132)
+[2025-11-29 21:36:36] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:36] [DEBUG] ⏳ Waiting 3.2s before next action...
+[2025-11-29 21:36:39] [INFO] 
+--- Progress: 8/48 ---
+[2025-11-29 21:36:39] [INFO] 📸 Fetching stories for @taliaovadia1 (ID: 487894176)
+[2025-11-29 21:36:39] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:39] [DEBUG] ⏳ Waiting 3.3s before next action...
+[2025-11-29 21:36:43] [INFO] 
+--- Progress: 9/48 ---
+[2025-11-29 21:36:43] [INFO] 📸 Fetching stories for @shahar__hauon (ID: 205732078)
+[2025-11-29 21:36:43] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:43] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:36:43] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:36:43] [DEBUG] ⏳ Waiting 4.7s before next action...
+[2025-11-29 21:36:47] [INFO] 
+--- Progress: 10/48 ---
+[2025-11-29 21:36:47] [INFO] 📸 Fetching stories for @shirabar_miz (ID: 53611755)
+[2025-11-29 21:36:47] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:47] [DEBUG] ⏳ Waiting 3.6s before next action...
+[2025-11-29 21:36:51] [INFO] 
+--- Progress: 11/48 ---
+[2025-11-29 21:36:51] [INFO] 📸 Fetching stories for @edenangelll (ID: 203425926)
+[2025-11-29 21:36:51] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:51] [DEBUG] ⏳ Waiting 2.7s before next action...
+[2025-11-29 21:36:54] [INFO] 
+--- Progress: 12/48 ---
+[2025-11-29 21:36:54] [INFO] 📸 Fetching stories for @ruchy_asher (ID: 2917864674)
+[2025-11-29 21:36:54] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:54] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:36:54] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:36:54] [DEBUG] ⏳ Waiting 3.8s before next action...
+[2025-11-29 21:36:57] [INFO] 
+--- Progress: 13/48 ---
+[2025-11-29 21:36:57] [INFO] 📸 Fetching stories for @hodaya_levi_i (ID: 993779541)
+[2025-11-29 21:36:57] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:36:57] [DEBUG] ⏳ Waiting 4.4s before next action...
+[2025-11-29 21:37:02] [INFO] 
+--- Progress: 14/48 ---
+[2025-11-29 21:37:02] [INFO] 📸 Fetching stories for @chanipollak (ID: 31331095)
+[2025-11-29 21:37:02] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:02] [DEBUG] ⏳ Waiting 2.3s before next action...
+[2025-11-29 21:37:04] [INFO] 
+--- Progress: 15/48 ---
+[2025-11-29 21:37:04] [INFO] 📸 Fetching stories for @sarashababo (ID: 4517983087)
+[2025-11-29 21:37:04] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:04] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:37:04] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:37:04] [DEBUG] ⏳ Waiting 4.4s before next action...
+[2025-11-29 21:37:08] [INFO] 
+--- Progress: 16/48 ---
+[2025-11-29 21:37:08] [INFO] 📸 Fetching stories for @einavbooblil_benisti (ID: 292491244)
+[2025-11-29 21:37:08] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:08] [DEBUG] ⏳ Waiting 2.6s before next action...
+[2025-11-29 21:37:11] [INFO] 
+--- Progress: 17/48 ---
+[2025-11-29 21:37:11] [INFO] 📸 Fetching stories for @orit.shoham.raived (ID: 37416744)
+[2025-11-29 21:37:11] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:11] [DEBUG] ⏳ Waiting 3.5s before next action...
+[2025-11-29 21:37:15] [INFO] 
+--- Progress: 18/48 ---
+[2025-11-29 21:37:15] [INFO] 📸 Fetching stories for @sivanazriel123 (ID: 1936447986)
+[2025-11-29 21:37:15] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:15] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:37:15] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:37:15] [DEBUG] ⏳ Waiting 4.6s before next action...
+[2025-11-29 21:37:19] [INFO] 
+--- Progress: 19/48 ---
+[2025-11-29 21:37:19] [INFO] 📸 Fetching stories for @ayelet_fogel (ID: 686063632)
+[2025-11-29 21:37:19] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:19] [DEBUG] ⏳ Waiting 2.6s before next action...
+[2025-11-29 21:37:22] [INFO] 
+--- Progress: 20/48 ---
+[2025-11-29 21:37:22] [INFO] 📸 Fetching stories for @estybarr (ID: 6175450459)
+[2025-11-29 21:37:22] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:22] [DEBUG] ⏳ Waiting 4.9s before next action...
+[2025-11-29 21:37:27] [INFO] 
+--- Progress: 21/48 ---
+[2025-11-29 21:37:27] [INFO] 📸 Fetching stories for @miri_cohenn_ (ID: 3627680922)
+[2025-11-29 21:37:27] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:27] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:37:27] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:37:27] [DEBUG] ⏳ Waiting 4.5s before next action...
+[2025-11-29 21:37:31] [INFO] 
+--- Progress: 22/48 ---
+[2025-11-29 21:37:31] [INFO] 📸 Fetching stories for @batyaschiff (ID: 289493513)
+[2025-11-29 21:37:31] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:31] [DEBUG] ⏳ Waiting 4.3s before next action...
+[2025-11-29 21:37:36] [INFO] 
+--- Progress: 23/48 ---
+[2025-11-29 21:37:36] [INFO] 📸 Fetching stories for @tahel___cohen (ID: 776193419)
+[2025-11-29 21:37:36] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:36] [DEBUG] ⏳ Waiting 4.8s before next action...
+[2025-11-29 21:37:40] [INFO] 
+--- Progress: 24/48 ---
+[2025-11-29 21:37:40] [INFO] 📸 Fetching stories for @ashleywaxmanbakshi (ID: 23062597)
+[2025-11-29 21:37:40] [DEBUG] (Dry run - skipping actual PHP execution)
+[2025-11-29 21:37:40] [INFO] 🏠 Simulating homepage visit...
+[2025-11-29 21:37:40] [DEBUG] (Dry run - skipping actual homepage request)
+[2025-11-29 21:37:40] [DEBUG] ⏳ Waiting 2.9s before next action...
+[2025-11-29 21:37:41] [WARNING] 
+⚠️  Interrupted by user

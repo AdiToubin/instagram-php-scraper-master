@@ -1,0 +1,125 @@
+[2025-12-15 13:07:18] [INFO] Configuration:
+[2025-12-15 13:07:18] [INFO]   JSON file:     .\user_ids_2025-12-07_173039.json
+[2025-12-15 13:07:18] [INFO]   Delay range:   5-15 seconds
+[2025-12-15 13:07:18] [INFO]   Homepage freq: Every 3 influencers
+[2025-12-15 13:07:18] [INFO]   Dry run:       False
+[2025-12-15 13:07:18] [INFO]   Log file:      logs/stories_20251215_130718.log
+[2025-12-15 13:07:18] [INFO] 
+[2025-12-15 13:07:18] [INFO] ============================================================
+[2025-12-15 13:07:18] [INFO] 🚀 Starting Daily Stories Automation
+[2025-12-15 13:07:18] [INFO] ============================================================
+[2025-12-15 13:07:18] [INFO] Loading influencers from: .\user_ids_2025-12-07_173039.json
+[2025-12-15 13:07:18] [SUCCESS] Loaded 19 influencers
+[2025-12-15 13:07:18] [INFO] Skipping 1 private accounts
+[2025-12-15 13:07:18] [INFO] Processing 18 public accounts in random order
+[2025-12-15 13:07:18] [INFO] 
+--- Progress: 1/18 ---
+[2025-12-15 13:07:18] [INFO] 📸 Fetching stories for @sivanazriel123 (ID: 1936447986)
+[2025-12-15 13:08:12] [SUCCESS] ✓ Successfully fetched stories for @sivanazriel123
+[2025-12-15 13:08:12] [DEBUG] ⏳ Waiting 5.8s before next action...
+[2025-12-15 13:08:17] [INFO] 
+--- Progress: 2/18 ---
+[2025-12-15 13:08:17] [INFO] 📸 Fetching stories for @shuki_salomon (ID: 2049372608)
+[2025-12-15 13:09:18] [SUCCESS] ✓ Successfully fetched stories for @shuki_salomon
+[2025-12-15 13:09:18] [DEBUG] ⏳ Waiting 10.5s before next action...
+[2025-12-15 13:09:29] [INFO] 
+--- Progress: 3/18 ---
+[2025-12-15 13:09:29] [INFO] 📸 Fetching stories for @orli_harar_79 (ID: 7604174133)
+[2025-12-15 13:10:09] [SUCCESS] ✓ Successfully fetched stories for @orli_harar_79
+[2025-12-15 13:10:09] [INFO] 🏠 Simulating homepage visit...
+[2025-12-15 13:10:09] [DEBUG] Homepage visit delay: 5.2s
+[2025-12-15 13:10:15] [DEBUG] ⏳ Waiting 8.7s before next action...
+[2025-12-15 13:10:23] [INFO] 
+--- Progress: 4/18 ---
+[2025-12-15 13:10:23] [INFO] 📸 Fetching stories for @kerenshaham (ID: 17784724)
+[2025-12-15 13:14:52] [ERROR] ✗ Timeout for @kerenshaham (exceeded 120s)
+[2025-12-15 13:14:52] [DEBUG] ⏳ Waiting 6.3s before next action...
+[2025-12-15 13:14:59] [INFO] 
+--- Progress: 5/18 ---
+[2025-12-15 13:14:59] [INFO] 📸 Fetching stories for @yaelzien (ID: 38567229589)
+[2025-12-15 13:16:47] [SUCCESS] ✓ Successfully fetched stories for @yaelzien
+[2025-12-15 13:16:47] [DEBUG] ⏳ Waiting 7.1s before next action...
+[2025-12-15 13:16:54] [INFO] 
+--- Progress: 6/18 ---
+[2025-12-15 13:16:54] [INFO] 📸 Fetching stories for @halperinnana (ID: 367022132)
+[2025-12-15 13:17:12] [SUCCESS] ✓ Successfully fetched stories for @halperinnana
+[2025-12-15 13:17:12] [INFO] 🏠 Simulating homepage visit...
+[2025-12-15 13:17:12] [DEBUG] Homepage visit delay: 10.0s
+[2025-12-15 13:17:22] [DEBUG] ⏳ Waiting 5.7s before next action...
+[2025-12-15 13:17:27] [INFO] 
+--- Progress: 7/18 ---
+[2025-12-15 13:17:27] [INFO] 📸 Fetching stories for @danielamit (ID: 37235253)
+[2025-12-15 13:18:20] [SUCCESS] ✓ Successfully fetched stories for @danielamit
+[2025-12-15 13:18:20] [DEBUG] ⏳ Waiting 7.7s before next action...
+[2025-12-15 13:18:28] [INFO] 
+--- Progress: 8/18 ---
+[2025-12-15 13:18:28] [INFO] 📸 Fetching stories for @einavbooblil_benisti (ID: 292491244)
+[2025-12-15 13:19:48] [SUCCESS] ✓ Successfully fetched stories for @einavbooblil_benisti
+[2025-12-15 13:19:48] [DEBUG] ⏳ Waiting 12.4s before next action...
+[2025-12-15 13:20:00] [INFO] 
+--- Progress: 9/18 ---
+[2025-12-15 13:20:00] [INFO] 📸 Fetching stories for @orit.shoham.raived (ID: 37416744)
+[2025-12-15 13:20:18] [SUCCESS] ✓ Successfully fetched stories for @orit.shoham.raived
+[2025-12-15 13:20:18] [INFO] 🏠 Simulating homepage visit...
+[2025-12-15 13:20:18] [DEBUG] Homepage visit delay: 8.5s
+[2025-12-15 13:20:26] [DEBUG] ⏳ Waiting 9.2s before next action...
+[2025-12-15 13:20:35] [INFO] 
+--- Progress: 10/18 ---
+[2025-12-15 13:20:35] [INFO] 📸 Fetching stories for @rutimenat_makeup_artist (ID: 1593326936)
+[2025-12-15 13:20:48] [SUCCESS] ✓ Successfully fetched stories for @rutimenat_makeup_artist
+[2025-12-15 13:20:48] [DEBUG] ⏳ Waiting 13.3s before next action...
+[2025-12-15 13:21:01] [INFO] 
+--- Progress: 11/18 ---
+[2025-12-15 13:21:01] [INFO] 📸 Fetching stories for @shelyhaimov (ID: 216695190)
+[2025-12-15 13:21:19] [SUCCESS] ✓ Successfully fetched stories for @shelyhaimov
+[2025-12-15 13:21:19] [DEBUG] ⏳ Waiting 14.7s before next action...
+[2025-12-15 13:21:34] [INFO] 
+--- Progress: 12/18 ---
+[2025-12-15 13:21:34] [INFO] 📸 Fetching stories for @shilatcohen_social (ID: 39138651195)
+[2025-12-15 13:21:41] [SUCCESS] ✓ Successfully fetched stories for @shilatcohen_social
+[2025-12-15 13:21:41] [INFO] 🏠 Simulating homepage visit...
+[2025-12-15 13:21:41] [DEBUG] Homepage visit delay: 10.6s
+[2025-12-15 13:21:52] [DEBUG] ⏳ Waiting 7.6s before next action...
+[2025-12-15 13:21:59] [INFO] 
+--- Progress: 13/18 ---
+[2025-12-15 13:21:59] [INFO] 📸 Fetching stories for @chanipollak (ID: 31331095)
+[2025-12-15 13:22:20] [SUCCESS] ✓ Successfully fetched stories for @chanipollak
+[2025-12-15 13:22:20] [DEBUG] ⏳ Waiting 10.0s before next action...
+[2025-12-15 13:22:30] [INFO] 
+--- Progress: 14/18 ---
+[2025-12-15 13:22:30] [INFO] 📸 Fetching stories for @danagrotsky (ID: 29131423)
+[2025-12-15 13:22:35] [SUCCESS] ✓ Successfully fetched stories for @danagrotsky
+[2025-12-15 13:22:35] [DEBUG] ⏳ Waiting 11.6s before next action...
+[2025-12-15 13:22:47] [INFO] 
+--- Progress: 15/18 ---
+[2025-12-15 13:22:47] [INFO] 📸 Fetching stories for @batyaschiff (ID: 289493513)
+[2025-12-15 13:22:51] [SUCCESS] ✓ Successfully fetched stories for @batyaschiff
+[2025-12-15 13:22:51] [INFO] 🏠 Simulating homepage visit...
+[2025-12-15 13:22:51] [DEBUG] Homepage visit delay: 13.4s
+[2025-12-15 13:23:05] [DEBUG] ⏳ Waiting 10.7s before next action...
+[2025-12-15 13:23:15] [INFO] 
+--- Progress: 16/18 ---
+[2025-12-15 13:23:15] [INFO] 📸 Fetching stories for @gal_tzemah_pastel (ID: 687480427)
+[2025-12-15 13:23:16] [SUCCESS] ✓ Successfully fetched stories for @gal_tzemah_pastel
+[2025-12-15 13:23:16] [DEBUG] ⏳ Waiting 13.2s before next action...
+[2025-12-15 13:23:30] [INFO] 
+--- Progress: 17/18 ---
+[2025-12-15 13:23:30] [INFO] 📸 Fetching stories for @corringideon (ID: 212668164)
+[2025-12-15 13:24:01] [SUCCESS] ✓ Successfully fetched stories for @corringideon
+[2025-12-15 13:24:01] [DEBUG] ⏳ Waiting 7.6s before next action...
+[2025-12-15 13:24:08] [INFO] 
+--- Progress: 18/18 ---
+[2025-12-15 13:24:08] [INFO] 📸 Fetching stories for @ruchy_asher (ID: 2917864674)
+[2025-12-15 13:24:31] [SUCCESS] ✓ Successfully fetched stories for @ruchy_asher
+[2025-12-15 13:24:31] [INFO] 
+============================================================
+[2025-12-15 13:24:31] [INFO] 📊 AUTOMATION SUMMARY
+[2025-12-15 13:24:31] [INFO] ============================================================
+[2025-12-15 13:24:31] [INFO] Total processed:    18
+[2025-12-15 13:24:31] [INFO] ✓ Successful:       17
+[2025-12-15 13:24:31] [INFO] ✗ Failed:           1
+[2025-12-15 13:24:31] [INFO] ⊘ Skipped:          1
+[2025-12-15 13:24:31] [INFO] 🏠 Homepage visits:  5
+[2025-12-15 13:24:31] [INFO] ⏱ Total time:       17.2 minutes
+[2025-12-15 13:24:31] [INFO] ============================================================
+[2025-12-15 13:24:31] [WARNING] ⚠️  1 influencers failed - check logs for details

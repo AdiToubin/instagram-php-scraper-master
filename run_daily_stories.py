@@ -32,8 +32,8 @@ import glob
 
 # ============== CONFIGURATION ==============
 
-DEFAULT_MIN_DELAY = 30  # seconds between influencers
-DEFAULT_MAX_DELAY = 120
+DEFAULT_MIN_DELAY = 5  # seconds between influencers
+DEFAULT_MAX_DELAY = 15
 HOMEPAGE_INTERVAL = 3  # simulate homepage visit every N influencers
 HOMEPAGE_MIN_DELAY = 5  # shorter delay for homepage
 HOMEPAGE_MAX_DELAY = 15
