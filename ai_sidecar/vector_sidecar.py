@@ -11,8 +11,9 @@ logger = logging.getLogger(__name__)
 # Constants
 EMBEDDING_MODEL = "text-embedding-3-small"
 LLM_MODEL = "gpt-4o-mini"
-SYSTEM_PROMPT = """You are a precise Instagram Coupon Analyzer. Output strict JSON.
+SYSTEM_PROMPT = """You are a precise Instagram Coupon Analyzer for Israeli influencers.
 Your goal is to detect VALID coupon codes and affiliate links.
+Output strictly JSON.
 """
 
 def build_context(story_obj: Dict[str, Any]) -> str:
@@ -41,7 +42,16 @@ def build_context(story_obj: Dict[str, Any]) -> str:
     # URL
     urls = story_obj.get("urls") or []
     # Filter out internal instagram urls
-    url_text = " ".join([u for u in urls if "instagram.com" not in u])
+    filtered_urls = []
+    for u in urls:
+        if isinstance(u, dict):
+             # Try to find a 'url' or 'href' key, or just dump it
+             u = u.get("url") or u.get("href") or str(u)
+        
+        if isinstance(u, str) and "instagram.com" not in u:
+            filtered_urls.append(u)
+
+    url_text = " ".join(filtered_urls)
     
     # Flatten newlines
     context = f"""
@@ -67,26 +77,79 @@ def get_embedding(text: str) -> List[float]:
 
 def retrieve_hybrid(supabase_client, embedding: List[float], user_id: str) -> List[Dict[str, Any]]:
     """
-    Retrieves positive examples and one negative example.
+    ✅ IMPROVED: Retrieves 6 positive examples (user + global) and 2 negatives.
+    ✅ ACTIVE LEARNING: Includes user corrections as high-priority examples!
     """
     try:
-        # 1. Get 4 Positive/Relevant Examples
-        positives = supabase_client.rpc("hybrid_search", {
+        # 1. Try to get 6 examples from this specific user
+        user_examples = supabase_client.rpc("hybrid_search", {
             "query_vec": embedding,
-            "match_threshold": 0.70,
-            "match_count": 4,
+            "match_threshold": 0.60,  # ⬇️ Lowered from 0.70 for better recall
+            "match_count": 6,         # ⬆️ Increased from 4
             "filter_user_id": user_id
         }).execute().data
         
-        # 2. Get 1 Negative (Organic) Example to prevent hallucination
+        # 2. If not enough user examples, supplement with global examples
+        if len(user_examples) < 4:
+            logger.info(f"Only {len(user_examples)} user examples found, adding global examples")
+            global_examples = supabase_client.rpc("hybrid_search", {
+                "query_vec": embedding,
+                "match_threshold": 0.65,
+                "match_count": 6 - len(user_examples)
+                # No filter_user_id = global search
+            }).execute().data
+            examples = user_examples + global_examples
+        else:
+            examples = user_examples[:6]
+        
+        # 3. Get 2 Negative (Organic) Examples to prevent hallucination
         negatives = supabase_client.rpc("hybrid_search", {
             "query_vec": embedding,
-            "match_threshold": 0.60,
-            "match_count": 1,
+            "match_threshold": 0.55,  # ⬇️ Lowered from 0.60
+            "match_count": 2,         # ⬆️ Increased from 1
             "filter_verdict": "organic"
         }).execute().data
         
-        return positives + negatives
+        # ✅ 4. ACTIVE LEARNING: Add user corrections as high-priority examples!
+        correction_examples = []
+        try:
+            corrections = supabase_client.table('user_corrections') \
+                .select('*') \
+                .eq('user_id', user_id) \
+                .order('corrected_at', desc=True) \
+                .limit(3) \
+                .execute().data
+            
+            # Convert corrections to example format
+            for corr in corrections:
+                # Build context from correction
+                context = corr.get('story_context', '')
+                if not context:
+                    # Fallback: build minimal context
+                    context = f"Brand: {corr.get('correct_brand', 'unknown')}, Code: {corr.get('correct_code', 'none')}"
+                
+                correction_examples.append({
+                    'context_text': context,
+                    'verdict': corr['correct_verdict'],
+                    'extracted_data': {
+                        'code': corr.get('correct_code'),
+                        'brand': corr.get('correct_brand')
+                    },
+                    'similarity': 1.0,  # Maximum priority!
+                    'source': 'USER_CORRECTION'  # Special marker
+                })
+            
+            if correction_examples:
+                logger.info(f"📚 Added {len(correction_examples)} user corrections as examples")
+        except Exception as e:
+            logger.debug(f"No corrections available: {e}")
+        
+        # Prioritize: corrections first, then examples, then negatives
+        all_examples = correction_examples + examples + negatives
+        
+        logger.info(f"Retrieved {len(correction_examples)} corrections + {len(examples)} positive + {len(negatives)} negative examples")
+        return all_examples
+        
     except Exception as e:
         logger.error(f"Retrieval failed: {e}")
         return []
@@ -143,6 +206,10 @@ def analyze_story_sidecar(story_obj: Dict[str, Any], supabase_client) -> Dict[st
         code_info = ex['extracted_data'].get('code', 'None')
         example_text += f"- Input: {ex['context_text'][:200]}...\n  Result: {ex['verdict']} (Code: {code_info})\n"
         
+    # ✅ IMPROVED: Extract URLs and hashtags for brand hints
+    story_urls = story_obj.get('urls', [])
+    story_hashtags = story_obj.get('hashtags', [])
+    
     final_prompt = f"""
     LEARN from these past examples:
     {example_text}
@@ -156,6 +223,8 @@ def analyze_story_sidecar(story_obj: Dict[str, Any], supabase_client) -> Dict[st
         "code": "string or null",
         "link": "target url or null",
         "brand": "brand name or null",
+        "description": "Short summary in HEBREW",
+        "category": "Fashion|Beauty|Home|Kids|Food|Travel|Tech|Other",
         "confidence": 0.0-1.0,
         "evidence": "caption|ocr|sticker|url"
     }}
@@ -165,16 +234,50 @@ def analyze_story_sidecar(story_obj: Dict[str, Any], supabase_client) -> Dict[st
     - code: ONLY textual codes (e.g. SAVE20). Must be explicit.
     - link: Affiliate links or bio links.
     - evidence: Where did you find the code/link?
+    - description: Write a concise summary of the VISUAL/TEXTUAL content in HEBREW (עברית). Do NOT purely say "no code"; describe what is actually happening (e.g., "Family dinner", "Selfie", "Product unpacking").
+    - category: Pick the best fit from the list.
     - If it's just a phone number or time, verdict is ORGANIC.
+    
+    ✅ BRAND EXTRACTION (CRITICAL):
+    1. Check URLs first: domain = brand
+       Example: "addictonline.co.il/CORIN" → brand: "addict"
+    2. Check hashtags: #brandname
+       Example: "#reserved" → brand: "reserved"
+    3. Check sticker text: often has "קוד של [brand]"
+       Example: "קוד של קולנטה" → brand: "kolenta"
+    4. If multiple brands, pick the MAIN one (with code/link)
+    5. Normalize: lowercase, remove spaces, no special chars
+    
+    Current story URLs: {story_urls}
+    Current story hashtags: {story_hashtags}
     """
     
-    # 5. LLM Call
+    # 5. LLM Call with Vision Support ✅
     try:
+        # Build message content (text + optional image)
+        user_content = [{"type": "text", "text": final_prompt}]
+        
+        # ✅ VISION ANALYSIS: Add image if available
+        image_url = story_obj.get("image_url")
+        if image_url:
+            # Check if it's a valid external URL (not Instagram CDN)
+            if "instagram.com" not in image_url and "fbcdn.net" not in image_url:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_url,
+                        "detail": "low"  # Cost-effective
+                    }
+                })
+                logger.info(f"✅ Added image to analysis: {image_url[:50]}...")
+            else:
+                logger.debug("Skipping Instagram CDN image (use data URI if needed)")
+        
         response = openai.chat.completions.create(
-            model=LLM_MODEL,
+            model=LLM_MODEL,  # gpt-4o-mini supports vision!
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": final_prompt}
+                {"role": "user", "content": user_content}
             ],
             response_format={"type": "json_object"},
             temperature=0.0

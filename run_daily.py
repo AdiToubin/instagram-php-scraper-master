@@ -1,5 +1,11 @@
 import os
 from datetime import datetime, timezone
+import sys
+
+# Force UTF-8 encoding for Windows consoles
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
 import re, json, time, base64, mimetypes, glob
@@ -11,6 +17,7 @@ import logging
 from collections import defaultdict
 from collections import defaultdict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tqdm import tqdm  # Progress bar
 
 # --- SIDECAR IMPORTS ---
 try:
@@ -598,14 +605,7 @@ def call_openai_with_retry(payload: Dict[str, Any]) -> requests.Response:
         response.raise_for_status()
     return response
 
-def extract_pairs_from_stickers(row) -> list[dict]:
-    out, texts = [], []
-    for s in row.get("stickers") or []:
-        t = s.get("text") if isinstance(s, dict) else None
-        if t:
-            texts.extend(re.split(r"[\r\n]+", t))
-    for line in texts:
-        line = line.strip()
+
 def extract_pairs_from_stickers(row) -> list[dict]:
     out, texts = [], []
     username = (row.get("username") or "").lower()
@@ -680,7 +680,56 @@ def extract_pairs_from_stickers(row) -> list[dict]:
     return out
 
 
+def load_all_processed_ids(user_id: Optional[str] = None) -> set:
+    """
+    Load all processed media_ids from both relevant_story and story_recommendations tables.
+    Optionally filter by user_id for efficiency.
+    
+    This is MUCH more efficient than calling already_in_relevant() in a loop!
+    - Old way: 100 stories × 2 API calls = 200 calls
+    - New way: 2 API calls total
+    """
+    processed_ids = set()
+    
+    # Build filter params
+    params = {"select": "media_id"}
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+    
+    # Load from relevant_story
+    try:
+        url = f"{SUPABASE_REST}/{REL_TABLE}"
+        r = sb_get(url, params)
+        if r.status_code == 200:
+            for row in r.json():
+                if row.get("media_id"):
+                    processed_ids.add(row["media_id"])
+        else:
+            logger.warning(f"Failed to load processed IDs from {REL_TABLE}: {r.status_code}")
+    except Exception as e:
+        logger.error(f"Error loading from {REL_TABLE}: {e}")
+    
+    # Load from story_recommendations
+    try:
+        url = f"{SUPABASE_REST}/{REC_TABLE}"
+        r = sb_get(url, params)
+        if r.status_code == 200:
+            for row in r.json():
+                if row.get("media_id"):
+                    processed_ids.add(row["media_id"])
+        else:
+            logger.warning(f"Failed to load processed IDs from {REC_TABLE}: {r.status_code}")
+    except Exception as e:
+        logger.error(f"Error loading from {REC_TABLE}: {e}")
+    
+    return processed_ids
+
+
 def already_in_relevant(media_id: str) -> bool:
+    """
+    DEPRECATED: Use load_all_processed_ids() instead for batch processing.
+    This function is kept for backward compatibility but is inefficient.
+    """
     # Check relevant_story table
     url = f"{SUPABASE_REST}/{REL_TABLE}"
     params = {"select": "media_id", "media_id": f"eq.{media_id}", "limit": "1"}
@@ -704,7 +753,144 @@ def already_in_relevant(media_id: str) -> bool:
     return False
 
 
+# ============== CONTENT DEDUPLICATION (IMPROVEMENT #7) ==============
+import hashlib
+from datetime import datetime, timedelta
+
+def generate_coupon_hash(result: Dict[str, Any]) -> str:
+    """
+    ✅ Generate unique hash from commercial content.
+    Same coupon/brand/link = same hash → prevents duplicates!
+    """
+    components = [
+        result.get('code', '').upper(),
+        result.get('brand', '').lower(),
+        result.get('url', ''),
+        result.get('verdict', '')
+    ]
+    
+    content = '|'.join(str(c) for c in components if c)
+    return hashlib.md5(content.encode()).hexdigest()[:16]
+
+
+def is_duplicate_in_timewindow(
+    user_id: str,
+    content_hash: str,
+    hours: int = 48
+) -> bool:
+    """
+    ✅ Check if same coupon was saved in last 48 hours.
+    Prevents "reminder" stories from cluttering DB.
+    """
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        
+        url = f"{SUPABASE_REST}/{REL_TABLE}"
+        params = {
+            "select": "media_id,date",
+            "user_id": f"eq.{user_id}",
+            "content_hash": f"eq.{content_hash}",
+            "date": f"gte.{cutoff}",
+            "limit": "1"
+        }
+        
+        r = sb_get(url, params)
+        if r.status_code == 200 and r.json():
+            logger.info(f"⏭️ Duplicate found: hash={content_hash}")
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Dedup check failed: {e}")
+        return False  # On error, allow insert (safer)
+# ====================================================================
+
+
+# ============== ACTIVE LEARNING (IMPROVEMENT #8) ==============
+def save_correction(
+    media_id: str,
+    user_id: str,
+    ai_result: Dict[str, Any],
+    correct_verdict: str,
+    correct_code: Optional[str] = None,
+    correct_brand: Optional[str] = None,
+    story_context: Optional[str] = None,
+    note: Optional[str] = None
+) -> Optional[requests.Response]:
+    """
+    ✅ Save user correction for Active Learning.
+    The system will learn from this correction in future analyses!
+    """
+    payload = {
+        "media_id": media_id,
+        "user_id": user_id,
+        "ai_verdict": ai_result.get("verdict"),
+        "ai_code": ai_result.get("code"),
+        "ai_brand": ai_result.get("brand"),
+        "ai_confidence": ai_result.get("confidence", 0.0),
+        "correct_verdict": correct_verdict,
+        "correct_code": correct_code,
+        "correct_brand": correct_brand,
+        "story_context": story_context,
+        "correction_note": note
+    }
+    
+    try:
+        url = f"{SUPABASE_REST}/user_corrections"
+        r = sb_post(
+            url,
+            payload,
+            prefer="return=representation,resolution=merge-duplicates",
+            params={"on_conflict": "media_id"}
+        )
+        
+        if r.status_code >= 400:
+            logger.error(f"Failed to save correction: {r.status_code} {r.text}")
+            return None
+        else:
+            logger.info(f"✅ Correction saved for {media_id}: {correct_verdict}")
+            return r
+    except Exception as e:
+        logger.error(f"Error saving correction: {e}")
+        return None
+
+
+def load_user_corrections(user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    ✅ Load recent corrections for this user.
+    These will be used as high-priority examples in Few-Shot learning.
+    """
+    try:
+        url = f"{SUPABASE_REST}/user_corrections"
+        params = {
+            "select": "*",
+            "user_id": f"eq.{user_id}",
+            "order": "corrected_at.desc",
+            "limit": str(limit)
+        }
+        
+        r = sb_get(url, params)
+        if r.status_code == 200:
+            corrections = r.json()
+            logger.info(f"📚 Loaded {len(corrections)} corrections for user {user_id}")
+            return corrections
+        else:
+            logger.warning(f"Failed to load corrections: {r.status_code}")
+            return []
+    except Exception as e:
+        logger.error(f"Error loading corrections: {e}")
+        return []
+# ====================================================================
+
+
 def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
+    # ✅ DEDUPLICATION: Check if this coupon was already saved recently
+    content_hash = generate_coupon_hash(result)
+    user_id = row.get("user_id")
+    
+    if is_duplicate_in_timewindow(user_id, content_hash, hours=48):
+        logger.info(f"⏭️ Skipping duplicate coupon: {result.get('code')} from {result.get('brand')}")
+        return None  # Don't insert duplicate
+    
     # דדופ רשימת הפריטים (למקרה של כפילויות)
     items = result.get("coupon_items") or []
     dedup = []
@@ -729,7 +915,7 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
 
     payload = {
         "media_id": row.get("media_id"),
-        "user_id": row.get("user_id"),
+        "user_id": user_id,
         "name": _safe_name(row, result),
         "brand": _safe_brand(row, result),  # לעמוד ב-NOT NULL הקיים
         "coupon": result.get("coupon"),
@@ -745,6 +931,8 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
         "coupons": list(sorted({c.upper() for c in (result.get("coupons") or [])})),
         "coupon_items": dedup,
         "category": result.get("category") or "other",
+        # ✅ NEW: Add content hash for future deduplication
+        "content_hash": content_hash,
     }
 
     url = f"{SUPABASE_REST}/{REL_TABLE}"
@@ -759,23 +947,8 @@ def upsert_relevant(row: Dict[str, Any], result: Dict[str, Any]):
     r.raise_for_status()
 
 #############################################################
-# ============== USER'S ADVANCED PROMPT ==============
-# ============== USER'S ADVANCED PROMPT ==============
-# [DEPRECATED] - Switched to Sidecar Mode
-SYSTEM_PROMPT = """
-You are an Instagram story analyzer.
-Deprecated. See ai_sidecar/vector_sidecar.py for active logic.
-"""
-# SYSTEM_PROMPT = \"\"\"You are an Instagram story analyzer.  
-# Your output MUST be valid JSON only.
-#
-# Your task has TWO SEPARATE GOALS:
-# 
-# ================================================
-# 1) COUPON DETECTION — HIGH SENSITIVITY (AGGRESSIVE)
-# ================================================
-# ... (Legacy prompt removed to save tokens) ...
-# \"\"\"
+# NOTE: SYSTEM_PROMPT removed - now using ai_sidecar/vector_sidecar.py
+#############################################################
 
 
 
@@ -937,482 +1110,11 @@ def infer_category_from_text_or_image(row, result=None):
     return "other"
 
 
-def call_openai_filter_old(row: Dict[str, Any], context_str: str = "") -> Optional[Dict[str, Any]]:
-    """
-    Core vision+text decision:
-    - Builds robust user payload (caption/ocr/stickers/hashtags/urls + hints).
-    - Adds the image (with CDN-safe fallback to data: URI).
-    - Uses STRICT or RELAXED criteria (described in SYSTEM_PROMPT on the server side).
-    - Returns a strict-JSON dict or None on failure.
-    """
-
-    # ---------- local logging (uses global dlog() if exists) ----------
-    def _dlog(*args, level="INFO", obj=None):
-        try:
-            if "dlog" in globals() and callable(globals()["dlog"]):
-                globals()["dlog"](*args, level=level, obj=obj)
-                return
-        except Exception:
-            pass
-        # fallback minimal logger
-        ts = datetime.now().strftime("%H:%M:%S")
-        msg = " ".join(str(a) for a in args)
-        print(f"[{ts}] [{level}] {msg}")
-        if obj is not None:
-            try:
-                print(_short(json.dumps(obj, ensure_ascii=False), 1200))
-            except Exception:
-                print(_short(str(obj), 1200))
-
-    # ---------- small utils (self-contained) ----------
-    URL_RE = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
-    BAD_IMAGE_HOSTS = {
-        "instagram.com",
-        "www.instagram.com",
-        "cdninstagram.com",
-        "scontent.cdninstagram.com",
-        "fbcdn.net",
-        "fna.fbcdn.net",
-    }
-    BAD_URL_HOSTS = {
-        "instagram.com",
-        "www.instagram.com",
-        "cdninstagram.com",
-        "fbcdn.net",
-        "fna.fbcdn.net",
-        "scontent.cdninstagram.com",
-    }
-
-    def _short(s, n=420):
-        if s is None:
-            return ""
-        try:
-            s = re.sub(r"\s+", " ", str(s))
-        except Exception:
-            s = str(s)
-        return s[:n]
-
-    def host_of(u: str) -> Optional[str]:
-        try:
-            return urlparse(u).hostname
-        except Exception:
-            return None
-
-    def is_bad_image_host(u: str) -> bool:
-        try:
-            h = (urlparse(u).hostname or "").lower()
-            if h in BAD_IMAGE_HOSTS:
-                return True
-            return any(h.endswith("." + bh) for bh in BAD_IMAGE_HOSTS)
-        except Exception:
-            return True
-
-    def is_brand_host(host: Optional[str]) -> bool:
-        if not host:
-            return False
-        h = host.lower()
-        if h in BAD_URL_HOSTS:
-            return False
-        for bad in BAD_URL_HOSTS:
-            if h.endswith("." + bad):
-                return False
-        return True
-
-    def brand_tokens_from_urls(urls: List[str]) -> List[str]:
-        toks = []
-        for u in urls:
-            # 1. Host parts
-            h = (host_of(u) or "").lower().replace("www.", "")
-            parts = re.split(r"[\.\-]+", h)
-            for p in parts:
-                if len(p) >= 4 and p not in (
-                    "instagram", "cdninstagram", "fbcdn", "fna", "com", "co", "il", 
-                    "link", "bio", "shop", "store", "app", "api", "www"
-                ):
-                    toks.append(p)
-            
-            # 2. Path parts (Critical for affiliate links like humanz.ai/BRAND/...)
-            try:
-                path = urlparse(u).path
-                path_parts = re.split(r"[\/\-_]+", path)
-                for p in path_parts:
-                    if p and len(p) >= 3 and not p.isdigit(): # Avoid numeric IDs
-                         if p.lower() not in ("posts", "stories", "reel", "p", "tv", "explore"):
-                            toks.append(p)
-            except Exception:
-                pass
-
-        return sorted(set(toks))
-
-    def extract_coupons_from_urls(urls: List[str], username: str = "") -> List[str]:
-        """Extract potential coupon codes from URL paths (e.g., _CORIN_ from addictonline.co.il/PRODUCT_CORIN_)"""
-        codes = []
-        username_lower = username.lower()
-        
-        for u in urls:
-            try:
-                path = urlparse(u).path
-                # Look for patterns like _CODE_ or /CODE/ in the path
-                path_parts = re.split(r'[/_\-]', path)
-                
-                for part in path_parts:
-                    if not part or len(part) < 4:
-                        continue
-                    
-                    part_upper = part.upper()
-                    
-                    # Apply same validation as sticker codes
-                    if part_upper in IGNORE_COUPONS:
-                        continue
-                    if part_upper.replace("-", "").isdigit():
-                        continue
-                    if re.match(r'^\d{2}-\d{2}$', part_upper):
-                        continue
-                    if re.match(r'^[0-9]+[A-Z]+[0-9]+[A-Z]+', part_upper):
-                        continue
-                    if not re.search(r'[A-Z]', part_upper):
-                        continue
-                    
-                    letter_count = sum(1 for c in part_upper if c.isalpha())
-                    if letter_count < 2:
-                        continue
-                    
-                    # Check if it matches username
-                    if username_lower and (part.lower() in username_lower or username_lower in part.lower()):
-                        codes.append(part_upper)  # This might be the influencer's code!
-                    
-                codes = list(set(codes))  # Deduplicate
-            except Exception:
-                pass
-        
-        return codes
+# call_openai_filter_old() removed - use call_openai_filter() instead
 
 
-    def has_marketing_words(text: str) -> bool:
-        if not text:
-            return False
-        t = text.lower()
-        heb_terms = [
-            "קופון",
-            "קוד",
-            "הנחה",
-            "מבצע",
-            "סייל",
-            "לינק",
-            "קישור",
-            "קנייה",
-            "לרכישה",
-            "קנו",
-            "חדש",
-            "הושק",
-            "השקה",
-            "חזר",
-            "חזרה למלאי",
-            "חזר למלאי",
-        ]
-        eng_terms = [
-            "coupon",
-            "code",
-            "promo",
-            "discount",
-            "sale",
-            "shop",
-            "buy",
-            "link",
-            "new",
-            "launch",
-            "launched",
-            "is back",
-            "back in stock",
-        ]
-        perc_or_price = any(sym in t for sym in ["%", "₪", "$", "€"])
-        return perc_or_price or any(x in t for x in heb_terms + eng_terms)
 
-    def extract_all_urls(row_: Dict[str, Any]) -> List[str]:
-        out = []
-        # 1) urls[]
-        for u in row_.get("urls") or []:
-            if isinstance(u, dict) and u.get("text"):
-                out.append(u["text"])
-            elif isinstance(u, str):
-                out.append(u)
-        # 2) stickers[].text
-        for s in row_.get("stickers") or []:
-            t = s.get("text") if isinstance(s, dict) else None
-            if t:
-                out += URL_RE.findall(t)
-        # 3) caption/ocr/raw_text_candidates
-        for fld in ("caption_text", "ocr_text"):
-            v = row_.get(fld)
-            if v:
-                out += URL_RE.findall(v)
-        for t in row_.get("raw_text_candidates") or []:
-            out += URL_RE.findall(str(t))
-        # unique & trim
-        seen, clean = set(), []
-        for u in out:
-            u2 = u.strip().strip(".,);]")
-            if u2 and u2 not in seen:
-                seen.add(u2)
-                clean.append(u2)
-        return clean
 
-    def fetch_image_as_data_uri(url: str, max_bytes: int = 4_000_000) -> Optional[str]:
-        try:
-            # Load IG Session from env
-            ig_session = os.getenv("IG_SESSIONID")
-            cookies = {}
-            if ig_session:
-                cookies["sessionid"] = ig_session
-
-            r = requests.get(
-                url,
-                timeout=15,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                    "Referer": "https://www.instagram.com/",
-                    "Sec-Fetch-Dest": "image",
-                    "Sec-Fetch-Mode": "no-cors",
-                    "Sec-Fetch-Site": "cross-site",
-                },
-                cookies=cookies
-            )
-            if r.status_code != 200 or not r.content:
-                _dlog(f"Image download failed: status={r.status_code}", level="WARN")
-                return None
-            content = r.content
-            ctype = (
-                r.headers.get("Content-Type")
-                or mimetypes.guess_type(url)[0]
-                or "image/jpeg"
-            )
-
-            # compress if too large and PIL available
-            if len(content) > max_bytes:
-                try:
-                    if (
-                        "PIL_OK" in globals()
-                        and globals().get("PIL_OK")
-                        and "Image" in globals()
-                    ):
-                        im = globals()["Image"].open(BytesIO(content)).convert("RGB")
-                        buf = BytesIO()
-                        im.save(buf, format="JPEG", quality=70, optimize=True)
-                        content = buf.getvalue()
-                        ctype = "image/jpeg"
-                    # else: keep as is (may be big)
-                except Exception:
-                    pass
-
-            b64 = base64.b64encode(content).decode("ascii")
-            return f"data:{ctype};base64,{b64}"
-        except requests.exceptions.Timeout:
-            _dlog("Image download timeout", level="WARN", obj={"url": url[:100]})
-            return None
-        except requests.exceptions.RequestException as e:
-            _dlog("Image download network error", level="WARN", obj={"err": str(e), "url": url[:100]})
-            return None
-        except Exception as e:
-            _dlog(
-                "fetch_image_as_data_uri failed",
-                level="WARN",
-                obj={"err": str(e), "url": url[:100]},
-            )
-            return None
-
-    # ---------- normalize & introspect ----------
-    media_id = row.get("media_id")
-    _dlog("➡️ call_openai_filter for media_id:", media_id)
-
-    # URLs & brand signals
-    urls_all = extract_all_urls(row)
-    _dlog("URLs collected:", obj=urls_all)
-
-    brand_urls = [u for u in urls_all if is_brand_host(host_of(u))]
-    _dlog("Brand URLs:", obj=brand_urls)
-
-    brand_tokens = brand_tokens_from_urls(brand_urls)
-    _dlog("Brand tokens:", obj=brand_tokens)
-
-    # stickers summarized
-    stickers_texts = []
-    for s in row.get("stickers") or []:
-        t = s.get("text") if isinstance(s, dict) else None
-        if t:
-            stickers_texts.append(_short(t, 1400))
-
-    hashtags = [
-        ("#" + h) if not str(h).startswith("#") else str(h)
-        for h in (row.get("hashtags") or [])
-    ]
-
-    # marketing intent from all visible text
-    all_text = " ".join(
-        [
-            str(row.get("caption_text") or ""),
-            str(row.get("ocr_text") or ""),
-            " ".join(stickers_texts),
-        ]
-    )
-    hint_marketing_intent = has_marketing_words(all_text)
-    _dlog("Marketing intent?", hint_marketing_intent)
-
-    # ✅ IMPROVEMENT 1: Extract codes from URLs
-    url_codes = extract_and_validate_url_codes(urls_all, row.get("username", ""))
-    url_extracted_codes = [c["code"] for c in url_codes]
-    if url_extracted_codes:
-        _dlog("🔍 Found codes in URLs:", obj=url_extracted_codes)
-
-    # ---------- build user payload ----------
-    user_blob = {
-        "context_from_previous_stories": context_str,
-        "username": row.get("username"),
-        "caption_text": _short(row.get("caption_text")),
-        "ocr_text": _short(row.get("ocr_text")),
-        "stickers_texts": stickers_texts[:10],
-        "hashtags": hashtags[:12],
-        "urls": urls_all[:12],
-        "brand_url_present": bool(brand_urls),
-        "brand_urls": brand_urls[:8],
-        "brand_tokens": brand_tokens[:8],
-        # ✅ Inject URL codes hint
-        "url_extracted_codes": url_extracted_codes,
-        "hints": {
-            "brand_url_present": bool(brand_urls),
-            "marketing_intent": hint_marketing_intent,
-        },
-        "permalink_present": bool(row.get("permalink")),
-        "has_image": bool(row.get("image_url")),
-        "has_video": bool(row.get("video_url")),
-        "image_url": row.get("image_url"),
-    }
-    _dlog("User blob (to model):", obj=user_blob)
-
-    # ---------- image handling (CDN-safe) ----------
-    img_ref = None
-    if row.get("image_url"):
-        if is_bad_image_host(row["image_url"]):
-            _dlog("Image host blocked – converting to data URI…")
-            img_ref = fetch_image_as_data_uri(row["image_url"])
-            if not img_ref:
-                _dlog(
-                    "Failed to build data URI, proceeding without image", level="WARN"
-                )
-        else:
-            img_ref = row["image_url"]
-
-    # ---------- messages ----------
-    content_parts = [
-        {"type": "text", "text": json.dumps(user_blob, ensure_ascii=False)}
-    ]
-    if img_ref:
-        content_parts.append(
-            {"type": "image_url", "image_url": {"url": img_ref, "detail": "low"}}
-        )
-
-    payload = {
-        "model": MODEL,  # must be a Vision model (e.g., "gpt-4.1-mini")
-        "temperature": 0,
-        "max_tokens": 500,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content_parts},
-        ],
-        "response_format": {"type": "json_object"},
-    }
-    _dlog("OpenAI payload (short): model=", MODEL)
-
-    # ---------- send with retries ----------
-    for attempt in range(1, 6):
-        try:
-            if "rate_limit_sleep" in globals() and callable(
-                globals()["rate_limit_sleep"]
-            ):
-                globals()["rate_limit_sleep"]()
-            print("=" * 50)
-            print(f"▶️ Attempt {attempt}")
-            resp = requests.post(
-                OPENAI_URL, headers=OA_HEADERS, json=payload, timeout=90
-            )
-            print("⬅️ Status:", resp.status_code)
-        except Timeout:
-            _dlog("⏱️ Timeout. Retrying...", level="WARN")
-            time.sleep(2)
-            continue
-        except RequestException as e:
-            _dlog("❌ Network error:", level="ERROR", obj=str(e))
-            return None
-
-        body_text = resp.text
-        _dlog("OpenAI raw response (short):", obj=_short(body_text, 1200))
-
-        if resp.status_code == 200:
-            try:
-                content = resp.json()["choices"][0]["message"]["content"]
-                _dlog("Model content (short):", obj=_short(content, 800))
-                return json.loads(content)
-            except Exception:
-                # fallback naive JSON extraction
-                try:
-                    start = body_text.index("{")
-                    end = body_text.rindex("}") + 1
-                    result = json.loads(body_text[start:end])
-                    
-                    # ✅ VALIDATION: Correct AI hallucinations
-                    # If AI says "collab_ad" but there is NO URL in this story -> downgrade to recommendation
-                    if result.get("content_type") == "collab_ad":
-                        has_url_in_story = bool(urls_all) or bool(row.get("stickers")) # Stickers might have links
-                        if not has_url_in_story:
-                            _dlog("⚠️ AI hallucinated collab_ad without URL! Downgrading to recommendation.", level="WARN")
-                            result["content_type"] = "recommendation"
-                            result["url"] = None
-                    
-                    # If AI says "coupon" but there is NO code in OCR/Text -> downgrade to recommendation
-                    if result.get("content_type") == "coupon":
-                        # This is harder to check strictly, but we can check if "coupon" field is empty
-                        if not result.get("coupon") and not result.get("coupons"):
-                             _dlog("⚠️ AI hallucinated coupon without code! Downgrading to recommendation.", level="WARN")
-                             result["content_type"] = "recommendation"
-
-                    return result
-                except Exception as e:
-                    _dlog(
-                        "JSON parse failed (even fallback).", level="ERROR", obj=str(e)
-                    )
-                    return None
-
-        if resp.status_code == 429:
-            _dlog("⚠️ 429 - Sleeping 5s", level="WARN")
-            time.sleep(5)
-            continue
-        if resp.status_code in (500, 502, 503, 504):
-            _dlog("⚠️ Server error - Sleeping 3s", level="WARN")
-            time.sleep(3)
-            continue
-
-        # 400 invalid_image_url => try once to force data URI if not done
-        if (
-            resp.status_code == 400
-            and img_ref
-            and isinstance(img_ref, str)
-            and not img_ref.startswith("data:")
-        ):
-            _dlog("400 invalid_image_url; forcing data URI fallback", level="WARN")
-            data_uri = fetch_image_as_data_uri(img_ref)
-            if data_uri:
-                content_parts[-1]["image_url"]["url"] = data_uri
-                payload["messages"][1]["content"] = content_parts
-                continue
-
-        _dlog(
-            "❌ OpenAI error:",
-            level="ERROR",
-            obj={"status": resp.status_code, "body": _short(body_text, 800)},
-        )
-        return None
-
-    raise RuntimeError("Request failed after retries")
 
 
 def dlog(*args, obj=None, level="INFO"):
@@ -2416,7 +2118,7 @@ def main_v2():
     """
     # Initialize statistics (IMPROVEMENT #4)
     stats = RunStatistics()
-    logger.info(f"🚀 Starting run_daily.py (Improvements enabled, DRY_RUN={DRY_RUN})")
+    logger.info(f"Starting run_daily.py (Improvements enabled, DRY_RUN={DRY_RUN})")
 
     # Initialize Supabase Client for Sidecar
     sb_client = None
@@ -2431,7 +2133,9 @@ def main_v2():
     id_map = load_id_to_username_map()
 
     try:
-        rows = get_raw_rows(MAX_ROWS)
+        raw_rows = get_raw_rows(MAX_ROWS)
+        # Normalize immediately to fix user_ids
+        rows = [normalize_row(r) for r in raw_rows]
     except Exception as e:
         logger.error(f"❌ Failed to fetch rows: {e}")
         return
@@ -2469,15 +2173,21 @@ def main_v2():
 
         print(f"\n👤 Processing User: {username} ({len(user_rows)} stories)")
         
+        # ✅ OPTIMIZATION: Load all processed IDs for this user ONCE
+        processed_ids = load_all_processed_ids(uid)
+        print(f"   📋 Already processed: {len(processed_ids)} stories")
+        
         # Context buffer for this user's session
         user_context = []
         
         # Session Deduplication Set
         session_dedup = set()
 
-        for idx, row in enumerate(user_rows, 1):
+        # ✅ PROGRESS BAR: Show processing progress
+        pbar = tqdm(enumerate(user_rows, 1), total=len(user_rows), desc=f"Processing {username}", unit="story")
+        for idx, row in pbar:
             media_id = row.get("media_id") or f"row_{idx}"
-            print(f"  👉 Story {idx}/{len(user_rows)}: {media_id}")
+            pbar.set_postfix({"story": media_id[:20]})
             
             # Normalize
             row = normalize_row(row)
@@ -2492,13 +2202,10 @@ def main_v2():
                     row["payload"]["username"] = id_map[uid]
                 # print(f"    ✅ Mapped user_id {uid} -> {id_map[uid]}")
             
-            # Check if already processed
-            try:
-                if already_in_relevant(media_id):
-                    print("    ↩️ Skipped (already relevant)")
-                    continue
-            except Exception:
-                pass
+            # ✅ OPTIMIZED: Check if already processed (O(1) set lookup instead of 2 API calls!)
+            if media_id in processed_ids:
+                print("    ↩️ Skipped (already processed)")
+                continue
 
             # Prepare context string
             context_str = ""
@@ -2552,6 +2259,8 @@ def main_v2():
                     stats.add_cost(sidecar_cost)
                     
                     print(f"    🤖 Sidecar: {verdict} (Conf: {result['confidence']:.2f})")
+                    print(f"    📝 {sr.get('description')}")
+                    print(f"    📂 {sr.get('category')}")
 
                     # 3. Save to Memory (Learning Loop)
                     # Only save if confidence is high to avoid poisoning the well
