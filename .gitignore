@@ -18,3 +18,18 @@ db/backups/
 
 # Logs
 **/logs/*.log
+
+# PHP / Composer
+vendor/
+composer.phar
+composer.lock
+
+# IDE
+.idea
+settings.json
+.DS_Store
+
+# PHPUnit
+phpunit.phar
+phpunit.xml
+tests/sessions
