@@ -1,0 +1,20 @@
+# Database backups
+db/backups/
+
+# Local environment
+.env
+*.env.local
+
+# Instagram session cookies (sensitive!)
+**/cookies/ig_cookies.json
+**/cookies/ig_cookies.txt
+**/cookies/*.json
+**/cookies/*.txt
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Logs
+**/logs/*.log

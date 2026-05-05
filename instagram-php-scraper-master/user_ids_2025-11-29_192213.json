@@ -1,0 +1,352 @@
+{
+    "timestamp": "2025-11-29T19:22:13+00:00",
+    "total_requested": 49,
+    "total_found": 49,
+    "total_errors": 0,
+    "results": [
+        {
+            "username": "sivanazriel123",
+            "user_id": "1936447986",
+            "full_name": "Sivan Azriel",
+            "is_private": false,
+            "followers": 19742
+        },
+        {
+            "username": "danagrotsky",
+            "user_id": "29131423",
+            "full_name": "",
+            "is_private": false,
+            "followers": 211356
+        },
+        {
+            "username": "corringideon",
+            "user_id": "212668164",
+            "full_name": "קורין גדעון",
+            "is_private": false,
+            "followers": 452441
+        },
+        {
+            "username": "ruchy_asher",
+            "user_id": "2917864674",
+            "full_name": "רוחי אשר",
+            "is_private": false,
+            "followers": 4819
+        },
+        {
+            "username": "einavbooblil_benisti",
+            "user_id": "292491244",
+            "full_name": "Einav Booblil | עינב בובליל",
+            "is_private": false,
+            "followers": 506525
+        },
+        {
+            "username": "chanipollak",
+            "user_id": "31331095",
+            "full_name": "חני פולק-  טיולים| אוכל כשר | יצירת תוכן",
+            "is_private": false,
+            "followers": 20315
+        },
+        {
+            "username": "danielamit",
+            "user_id": "37235253",
+            "full_name": "Danielle Amit",
+            "is_private": false,
+            "followers": 523669
+        },
+        {
+            "username": "rutimenat_makeup_artist",
+            "user_id": "1593326936",
+            "full_name": "רותי מנת",
+            "is_private": false,
+            "followers": 6673
+        },
+        {
+            "username": "yaelzien",
+            "user_id": "38567229589",
+            "full_name": "Yael Zien יעל צין",
+            "is_private": false,
+            "followers": 81670
+        },
+        {
+            "username": "batyaschiff",
+            "user_id": "289493513",
+            "full_name": "בתיה שיף",
+            "is_private": false,
+            "followers": 16331
+        },
+        {
+            "username": "halperinnana",
+            "user_id": "367022132",
+            "full_name": "Nana Halperin",
+            "is_private": false,
+            "followers": 83202
+        },
+        {
+            "username": "shuki_salomon",
+            "user_id": "2049372608",
+            "full_name": "שוקי סלומון",
+            "is_private": false,
+            "followers": 100556
+        },
+        {
+            "username": "kerenshaham",
+            "user_id": "17784724",
+            "full_name": "קרן שחם",
+            "is_private": false,
+            "followers": 147235
+        },
+        {
+            "username": "orit.shoham.raived",
+            "user_id": "37416744",
+            "full_name": "אורית שוהם-ראבד",
+            "is_private": false,
+            "followers": 64552
+        },
+        {
+            "username": "orli_harar_79",
+            "user_id": "7604174133",
+            "full_name": "אורלי חרר",
+            "is_private": false,
+            "followers": 13032
+        },
+        {
+            "username": "anaelshmueli",
+            "user_id": "45462232",
+            "full_name": "ענהאל שמואלי",
+            "is_private": true,
+            "followers": 89725
+        },
+        {
+            "username": "shelyhaimov",
+            "user_id": "216695190",
+            "full_name": "שלי חיימוב|מקדמת עסקים בדיגיטל",
+            "is_private": false,
+            "followers": 3636
+        },
+        {
+            "username": "shilatcohen_social",
+            "user_id": "39138651195",
+            "full_name": "שילת כהן",
+            "is_private": false,
+            "followers": 2896
+        },
+        {
+            "username": "gal_tzemah_pastel",
+            "user_id": "687480427",
+            "full_name": "Gal Tzemah 🤍 גל צמח",
+            "is_private": false,
+            "followers": 23099
+        },
+        {
+            "username": "estybarr",
+            "user_id": "6175450459",
+            "full_name": "אסתי בר",
+            "is_private": false,
+            "followers": 40078
+        },
+        {
+            "username": "sarashababo",
+            "user_id": "4517983087",
+            "full_name": "שרה שבאבו",
+            "is_private": false,
+            "followers": 98475
+        },
+        {
+            "username": "estysoco",
+            "user_id": "54950354",
+            "full_name": "Esty Soco",
+            "is_private": false,
+            "followers": 135564
+        },
+        {
+            "username": "chavi_heifetz",
+            "user_id": "24973107",
+            "full_name": "Chavi Heifetz",
+            "is_private": false,
+            "followers": 50342
+        },
+        {
+            "username": "giti_viner",
+            "user_id": "5564973011",
+            "full_name": "גיטי וינר",
+            "is_private": false,
+            "followers": 23557
+        },
+        {
+            "username": "chani_vainberger",
+            "user_id": "1273615238",
+            "full_name": "Chana vainberger",
+            "is_private": false,
+            "followers": 64100
+        },
+        {
+            "username": "hana_malul",
+            "user_id": "47970650725",
+            "full_name": "Hana Malul | חנה מלול",
+            "is_private": false,
+            "followers": 74208
+        },
+        {
+            "username": "odel_malul148",
+            "user_id": "56710284982",
+            "full_name": "אדל מלול",
+            "is_private": false,
+            "followers": 15850
+        },
+        {
+            "username": "miri_cohenn_",
+            "user_id": "3627680922",
+            "full_name": "Miri Cohen | מירי כהן",
+            "is_private": false,
+            "followers": 494188
+        },
+        {
+            "username": "aline_cohenn",
+            "user_id": "1495919534",
+            "full_name": "Aline Cohen",
+            "is_private": false,
+            "followers": 1172294
+        },
+        {
+            "username": "or_shpitz",
+            "user_id": "193448389",
+            "full_name": "Or Shpitz אור שפיץ",
+            "is_private": false,
+            "followers": 460419
+        },
+        {
+            "username": "sara_basan_makeup",
+            "user_id": "43098904440",
+            "full_name": "שרה בסן",
+            "is_private": false,
+            "followers": 7336
+        },
+        {
+            "username": "hodaya_levi_i",
+            "user_id": "993779541",
+            "full_name": "Hodaya Levi",
+            "is_private": false,
+            "followers": 41624
+        },
+        {
+            "username": "annezivi",
+            "user_id": "203661168",
+            "full_name": "Anne Zivi Weiss",
+            "is_private": false,
+            "followers": 386123
+        },
+        {
+            "username": "taliaovadia1",
+            "user_id": "487894176",
+            "full_name": "TALIA OVADIA RAZ",
+            "is_private": false,
+            "followers": 435206
+        },
+        {
+            "username": "danitgreenberg",
+            "user_id": "26452000",
+            "full_name": "Danit Greenberg",
+            "is_private": false,
+            "followers": 502243
+        },
+        {
+            "username": "ayelet_fogel",
+            "user_id": "686063632",
+            "full_name": "Ayelet fogel",
+            "is_private": false,
+            "followers": 95714
+        },
+        {
+            "username": "shirabar_miz",
+            "user_id": "53611755",
+            "full_name": "Shira Bar",
+            "is_private": false,
+            "followers": 138326
+        },
+        {
+            "username": "shahar__hauon",
+            "user_id": "205732078",
+            "full_name": "SHAHAR HAUON | שחר חיון",
+            "is_private": false,
+            "followers": 550195
+        },
+        {
+            "username": "alina_rabinovich",
+            "user_id": "177407683",
+            "full_name": "Alina Rabinovich",
+            "is_private": false,
+            "followers": 71258
+        },
+        {
+            "username": "helenhod",
+            "user_id": "49305136",
+            "full_name": "Helen Hod",
+            "is_private": false,
+            "followers": 148933
+        },
+        {
+            "username": "the_adi_angel",
+            "user_id": "453899185",
+            "full_name": "אנג׳ל",
+            "is_private": false,
+            "followers": 35836
+        },
+        {
+            "username": "tahel___cohen",
+            "user_id": "776193419",
+            "full_name": "תהל כהן",
+            "is_private": false,
+            "followers": 50870
+        },
+        {
+            "username": "edenangelll",
+            "user_id": "203425926",
+            "full_name": "עדן אנג׳ל",
+            "is_private": false,
+            "followers": 47208
+        },
+        {
+            "username": "shanydaphnegoldstein",
+            "user_id": "14704550",
+            "full_name": "Shani Goldstein שני דפני גולדשטיין",
+            "is_private": false,
+            "followers": 143215
+        },
+        {
+            "username": "kimbenshimon",
+            "user_id": "3735221006",
+            "full_name": "Kim Dede Ben Shimon",
+            "is_private": false,
+            "followers": 180078
+        },
+        {
+            "username": "ashleywaxmanbakshi",
+            "user_id": "23062597",
+            "full_name": "Ashley Waxman Bakshi",
+            "is_private": false,
+            "followers": 394415
+        },
+        {
+            "username": "shellyeven",
+            "user_id": "27064387",
+            "full_name": "Shelly Evenshtein | שלי אבנשטיין",
+            "is_private": false,
+            "followers": 74116
+        },
+        {
+            "username": "beilly_yampel",
+            "user_id": "224765196",
+            "full_name": "Beilly Yampel",
+            "is_private": false,
+            "followers": 56339
+        },
+        {
+            "username": "iska_hajeje_karsenti",
+            "user_id": "687405543",
+            "full_name": "יסכה מרלן חגג",
+            "is_private": false,
+            "followers": 51824
+        }
+    ],
+    "errors": []
+}
