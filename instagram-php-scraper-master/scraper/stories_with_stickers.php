@@ -6,6 +6,19 @@
 // Optional: IG_WWW_CLAIM, IG_DEBUG=1 (dump story_debug.json)
 declare(strict_types=1);
 
+// טעינת .env אוטומטית (מאפשר הרצה ישירה ללא הגדרת env vars חיצוניים)
+(function() {
+    $envFile = dirname(__DIR__) . '/.env';
+    if (!is_file($envFile)) return;
+    foreach (file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') continue;
+        if (preg_match('/^([^=]+)=(.*)$/', $line, $m)) {
+            $k = trim($m[1]); $v = trim($m[2]);
+            if (getenv($k) === false) putenv("$k=$v");
+        }
+    }
+})();
 
 require __DIR__ . '/vendor/autoload.php';
 
@@ -193,7 +206,7 @@ $client=new Client([
 
 /* === SUPABASE: יצירת לקוח פעם אחת לפי env === */
 $supaUrl   = rtrim(envs('SUPABASE_URL',''), '/');
-$supaKey   = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRneGtkZW5rYmFwaHphYmtjeWJxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1OTAxMTA2OCwiZXhwIjoyMDc0NTg3MDY4fQ.A2UCwyK2fVYTv6JUwPqv5sSoz9XvtErNcCn2B55hquk";
+$supaKey   = envs('SUPABASE_SERVICE_KEY', envs('SUPABASE_KEY',''));
 $supaTable = envs('SUPABASE_TABLE','story_raw');
 $sbClient  = null;
 
@@ -210,9 +223,7 @@ if ($supaUrl!=='' && $supaKey!=='') {
     ],
   ]);
 } else {
-  fwrite(STDERR, "WARN: SUPABASE_URL / SUPABASE_KEY not set – DB insert disabled.\n");
-  fwrite(STDERR, "DEBUG URL={$supaUrl} KEYLEN=".strlen($supaKey)." CLIENT?=".($sbClient?'yes':'no')."\n");
-
+  fwrite(STDERR, "WARN: SUPABASE_URL / SUPABASE_SERVICE_KEY not set – DB insert disabled.\n");
 }
 
 /* === SUPABASE: פונקציה ששומרת סטורי יחיד RAW === */
@@ -233,7 +244,11 @@ function sb_upsert_story(?Client $sbClient, string $table, array $story): void {
 }
 
 /* ---------- API call ---------- */
-$res=$client->post('api/v1/feed/reels_media/',['form_params'=>['user_ids'=>json_encode([(string)$uid],JSON_UNESCAPED_SLASHES)]]);
+try {
+  $res=$client->post('api/v1/feed/reels_media/',['form_params'=>['user_ids'=>json_encode([(string)$uid],JSON_UNESCAPED_SLASHES)]]);
+} catch (\Throwable $e) {
+  jdie("Connection error: ".$e->getMessage(), 1);
+}
 $code=$res->getStatusCode(); $body=(string)$res->getBody();
 if($code!==200) jdie("HTTP {$code} response:\n{$body}",1);
 $j=json_decode($body,true); if(!is_array($j)) jdie("Bad JSON\n{$body}",1);

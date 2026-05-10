@@ -33,3 +33,14 @@ settings.json
 phpunit.phar
 phpunit.xml
 tests/sessions
+
+# Batch output files (large data, not for version control)
+**/scraper/batch_stories_*.json
+**/scraper/user_ids_batch.txt
+
+# Claude Code internal files
+.claude/
+
+# Local docs / reports
+docs/
+דוחות/

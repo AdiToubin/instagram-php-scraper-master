@@ -39,6 +39,6 @@
     "email": "r.kapishev@gmail.com"
   },
   "config": {
-    "cafile": "C:/certs/cacert.pem"
+    "cafile": "C:/php/cacert.pem"
   }
 }
