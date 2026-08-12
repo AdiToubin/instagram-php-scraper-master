@@ -4,5 +4,4 @@
 # Example influencers:
 
 sivanazriel123
-danagrotsky
-corringideon
+

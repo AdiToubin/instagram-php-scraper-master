@@ -87,8 +87,8 @@ foreach ($userIds as $userId) {
         echo "ERROR (Invalid JSON)\n";
         $errors[] = [
             'user_id' => $userId,
-            'error' => 'Invalid JSON response',
-            'output' => substr($jsonOutput, 0, 500)
+            'error' => 'Invalid JSON output',
+            'output' => implode("\n", $output)
         ];
         continue;
     }

@@ -2,6 +2,8 @@
 // stories_functions.php - Shared functions for Instagram stories and highlights extraction
 declare(strict_types=1);
 
+require_once __DIR__ . '/brand_detector.php';
+
 /* ---------- mbstring fallbacks ---------- */
 function u_lower(string $s): string { return function_exists('mb_strtolower') ? mb_strtolower($s,'UTF-8') : strtolower($s); }
 function u_len(string $s): int { return function_exists('mb_strlen') ? mb_strlen($s,'UTF-8') : strlen($s); }
@@ -233,8 +235,9 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
   }
 
   /* ----- OCR (image/video) ----- */
-  $rawTextCandidates=[]; if($captionText) $rawTextCandidates[]=$captionText;
+  $rawTextCandidates=[];
   $hasText=false;
+  $ocrParts=[];
 
   // Extract text from Instagram's accessibility_caption (AI-generated text description)
   if(isset($it['accessibility_caption'])){
@@ -244,6 +247,7 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
       $extractedText = trim($matches[1]);
       if($extractedText !== ''){
         $rawTextCandidates[] = $extractedText;
+        $ocrParts[] = $extractedText;
         $hasText = true;
         foreach(couponCodesFromText($extractedText) as $c){
           $stickers[]=['type'=>'coupon','text'=>$c,'bbox'=>[0,0,0,0],'confidence'=>0.9];
@@ -258,6 +262,7 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
   if (tesseractAvailable()) {
     list($ocrResults, $ocrErrors) = processOCR($imageUrl, $videoUrl, $durMs, $client, $ocrLangs, $ffmpeg);
     $rawTextCandidates = array_merge($rawTextCandidates, $ocrResults['texts']);
+    $ocrParts = array_merge($ocrParts, $ocrResults['texts']);
     $stickers = array_merge($stickers, $ocrResults['stickers']);
     $urls = array_merge($urls, $ocrResults['urls']);
     $procErrors = array_merge($procErrors, $ocrErrors);
@@ -266,6 +271,12 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
 
   // dedupe raw texts
   $rawTextCandidates = uniqStrings(array_merge($rawTextCandidates, array_values(array_filter(array_map(fn($s)=>$s['text']??'', $stickers)))));
+
+  // scan all collected text for inline #hashtags and @mentions (typed directly on the story)
+  foreach ($rawTextCandidates as $candidateText) {
+    $hashtags = uniqStrings(array_merge($hashtags, collectHashtagsFromCaption($candidateText)));
+    $mentions = uniqStrings(array_merge($mentions, collectMentionsFromCaption($candidateText)));
+  }
 
   // add URL stickers for found urls (if missing)
   $haveUrlSticker=[]; foreach($stickers as $s){ if(($s['type']??'')==='url' && !empty($s['text'])) $haveUrlSticker[strtolower($s['text'])]=1; }
@@ -277,20 +288,21 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
   // frames_used heuristic
   $framesUsed=[]; if($durMs && $durMs>0){ $framesUsed=[0, min(45000,max(0,$durMs-1)), min(90000,max(0,$durMs-1))]; $framesUsed=array_values(array_unique($framesUsed)); }
 
-  // OCR fields in schema
-  $ocrText = null; $ocrConf = 0.0;
-  $hasText = $hasText || ($captionText!==null && $captionText!=='') || !empty($rawTextCandidates);
+  $ocrText = !empty($ocrParts) ? implode("\n", $ocrParts) : null;
+  $hasText = $hasText || !empty($rawTextCandidates);
 
   // language guess
-  $lang = langGuess($captionText ?? ($rawTextCandidates[0] ?? null));
+  $lang = langGuess($rawTextCandidates[0] ?? null);
 
   // content hash
-  $hashBase=json_encode(['media_id'=>$mediaId,'caption'=>$captionText,'urls'=>array_map(fn($u)=>$u['text'],$urls),'hashtags'=>$hashtags,'mentions'=>$mentions],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+  $hashBase=json_encode(['media_id'=>$mediaId,'urls'=>array_map(fn($u)=>$u['text'],$urls),'hashtags'=>$hashtags,'mentions'=>$mentions],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
   $contentHash=sha1((string)$hashBase);
 
   // processing errors compose
   $procErr = tesseractAvailable() ? [] : ['ocr_not_enabled'];
   $procErr = array_values(array_unique(array_merge($procErr,$procErrors)));
+
+  $brandDetector = new BrandDetector();
 
   $result = [
     "media_id"        => (string)($mediaId??''),
@@ -300,13 +312,10 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
     "taken_at_iso"    => $takenAtIso,
     "expiring_at_iso" => $expiringIso,
 
-    "permalink"       => null,
     "image_url"       => $imageUrl ?? null,
     "video_url"       => $videoUrl ?? null,
 
-    "caption_text"    => $captionText ?? null,
     "ocr_text"        => $ocrText,
-    "ocr_confidence"  => (float)$ocrConf,
 
     "stickers"        => $stickers,
     "urls"            => array_values($urls),
@@ -318,7 +327,7 @@ function extractStoryData(array $it, string $uid, $client, string $ocrLangs, str
     "media_meta"      => ["width"=>(int)$width,"height"=>(int)$height,"duration_ms"=>(int)($durMs??0)],
 
     "language_guess"  => $lang,
-    "brand_candidates"=> [],
+    "brand_candidates"=> $brandDetector->detectBrands($imageUrl ?? '', implode(' ', $rawTextCandidates)),
     "source_flags"    => ["has_text"=>(bool)$hasText,"has_stickers"=>!empty($stickers),"has_logo_hint"=>false],
 
     "content_hash"    => $contentHash,

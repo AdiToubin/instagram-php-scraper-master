@@ -65,6 +65,41 @@ if (empty($userIds)) jdie("אין user IDs להרצה");
 echo "משתמשות ב-JSON: {$jsonFile}\n";
 echo "מריץ סטורי עבור " . count($userIds) . " משפיעניות...\n\n";
 
+// מחיקת נתונים קיימים מ-story_raw לפני כניסת נתונים חדשים
+function supabase_truncate_table(string $supaUrl, string $supaKey, string $table): bool {
+    $url = $supaUrl . '/rest/v1/' . $table . '?or=(media_id.neq.null,media_id.is.null)';
+    $ctx = stream_context_create([
+        'http' => [
+            'method'        => 'DELETE',
+            'header'        => implode("\r\n", [
+                'apikey: '        . $supaKey,
+                'Authorization: Bearer ' . $supaKey,
+                'Content-Type: application/json',
+                'Prefer: return=minimal',
+            ]),
+            'ignore_errors' => true,
+        ]
+    ]);
+    @file_get_contents($url, false, $ctx);
+    if (!isset($http_response_header)) return false;
+    preg_match('/HTTP\/\S+ (\d+)/', $http_response_header[0] ?? '', $m);
+    $code = (int)($m[1] ?? 0);
+    return $code >= 200 && $code < 300;
+}
+
+$supaUrl   = rtrim(getenv('SUPABASE_URL') ?: '', '/');
+$supaKey   = getenv('SUPABASE_SERVICE_KEY') ?: (getenv('SUPABASE_KEY') ?: '');
+$supaTable = getenv('SUPABASE_TABLE') ?: 'story_raw';
+
+if ($supaUrl !== '' && $supaKey !== '') {
+    echo "מוחק נתונים קיימים מ-{$supaTable}... ";
+    flush();
+    $ok = supabase_truncate_table($supaUrl, $supaKey, $supaTable);
+    echo $ok ? "✓\n\n" : "WARN: מחיקה נכשלה (ממשיך בכל זאת)\n\n";
+} else {
+    echo "WARN: SUPABASE_URL / SUPABASE_SERVICE_KEY לא מוגדרים – דילוג על מחיקה\n\n";
+}
+
 // הרצה לכל משפיענית
 $allStories = [];
 $errors = [];
@@ -74,22 +109,45 @@ foreach ($userIds as $username => $userId) {
     echo "[@{$username}] user_id={$userId} ... ";
     flush();
 
-    $cmd = 'php stories_with_stickers.php ' . escapeshellarg($userId) . ' 2>NUL';
+    // Child writes JSON directly to a temp file via --output= arg (avoids all exec() pipe/encoding issues)
+    $ts = time();
+    $tmpFile  = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ig_' . $userId . '_' . $ts . '.json';
+    $errFile  = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ig_' . $userId . '_' . $ts . '.err';
+    $cmd = 'php stories_with_stickers.php ' . escapeshellarg($userId) . ' ' . escapeshellarg($username)
+         . ' ' . escapeshellarg('--output=' . $tmpFile) . ' 2>' . escapeshellarg($errFile);
 
-    $stories = null;
-    $rc = 0;
+    $stories   = null;
+    $rc        = 0;
+    $lastStderr = '';
     for ($attempt = 1; $attempt <= 3; $attempt++) {
-        $output = [];
-        exec($cmd, $output, $rc);
-        $stories = json_decode(implode("\n", $output), true);
-        if ($rc === 0 && is_array($stories)) break;
+        $dummy = [];
+        exec($cmd, $dummy, $rc);
+        $lastStderr = @file_get_contents($errFile) ?: '';
+        if ($rc === 0 && file_exists($tmpFile) && filesize($tmpFile) > 0) {
+            $raw = file_get_contents($tmpFile);
+            @unlink($tmpFile);
+            @unlink($errFile);
+            $stories = json_decode($raw, true);
+            if (is_array($stories)) break;
+        }
+        @unlink($tmpFile);
         if ($attempt < 3) { echo "(retry {$attempt}) "; sleep(5); }
     }
+    @unlink($errFile);
 
     if ($rc !== 0 || !is_array($stories)) {
-        echo "ERROR (exit {$rc})\n";
+        $errMsg = is_array($stories) ? "exit code {$rc}" : 'invalid JSON';
+        $stderrHint = trim($lastStderr);
+        if ($stderrHint !== '') {
+            // Print first line of stderr as a diagnostic hint
+            $firstLine = explode("\n", $stderrHint)[0];
+            echo "ERROR (exit {$rc}) — {$firstLine}\n";
+        } else {
+            echo "ERROR (exit {$rc})\n";
+        }
         $errors[] = ['username' => $username, 'user_id' => $userId,
-                     'error' => is_array($stories) ? "exit code {$rc}" : 'invalid JSON'];
+                     'error'    => $errMsg,
+                     'stderr'   => $stderrHint ?: null];
         sleep(1);
         continue;
     }
@@ -108,7 +166,7 @@ echo "סיכום: " . count($userIds) . " משפיעניות | {$totalStories} �
 echo str_repeat("=", 60) . "\n\n";
 
 if (!empty($allStories)) {
-    $outFile = $scraperDir . '/batch_stories_' . date('Y-m-d_His') . '.json';
+    $outFile = $scraperDir . '/batch_stories.json';
     file_put_contents($outFile, json_encode([
         'timestamp'     => date('c'),
         'json_source'   => basename($jsonFile),

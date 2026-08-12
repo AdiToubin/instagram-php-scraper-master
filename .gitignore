@@ -36,7 +36,15 @@ tests/sessions
 
 # Batch output files (large data, not for version control)
 **/scraper/batch_stories_*.json
+**/scraper/batch_stories.json
 **/scraper/user_ids_batch.txt
+
+# Error/output dumps
+err.txt
+**/scraper/err.txt
+
+# Stray empty artifact
+/php
 
 # Claude Code internal files
 .claude/
