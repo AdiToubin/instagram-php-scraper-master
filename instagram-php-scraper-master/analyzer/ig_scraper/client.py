@@ -8,8 +8,10 @@ so the raw JSON this returns is a drop-in replacement for what the PHP
 scraper used to fetch.
 """
 
+import html
 import json
 import os
+import re
 from typing import Any, Dict
 
 import requests
@@ -89,3 +91,67 @@ def fetch_user_profile(username: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise RuntimeError(f"Invalid JSON response for @{username}")
     return data
+
+
+def _parse_abbreviated_count(text: str) -> int:
+    text = text.strip().upper().replace(",", "")
+    match = re.match(r"^([\d.]+)([KM]?)$", text)
+    if not match:
+        return 0
+    multiplier = {"": 1, "K": 1_000, "M": 1_000_000}[match.group(2)]
+    return int(float(match.group(1)) * multiplier)
+
+
+def fetch_user_profile_html(username: str) -> Dict[str, Any]:
+    """Fallback for fetch_user_profile(): the web_profile_info API endpoint is
+    heavily rate-limited (429 / connection resets) even with a valid session,
+    but the regular profile page still embeds the user_id in its bootstrap
+    JSON as "profile_id":"<id>" (page_logging.params for PolarisProfileRoot).
+    Requires the same session cookies - Instagram gates the plain HTML page
+    for logged-out requests too. Returns a dict shaped like the API response
+    (data.user.{id,full_name,is_private,edge_followed_by.count}) so callers
+    don't need to know which path served the result.
+    """
+    _require_session()
+    headers = {
+        "User-Agent": IG_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cookie": f"csrftoken={IG_CSRF}; sessionid={IG_SESSIONID}; ds_user_id={IG_DS_USER_ID};",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    resp = requests.get(BASE_URL + username + "/", headers=headers, timeout=30)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} for @{username} (HTML)")
+    text = resp.text
+
+    id_match = re.search(r'"profile_id":"(\d+)"', text)
+    if not id_match:
+        raise RuntimeError(f"user_id not found in profile HTML for @{username}")
+    user_id = id_match.group(1)
+
+    full_name = ""
+    title_match = re.search(r"<title>(.*?)\s*\(&#064;", text)
+    if title_match:
+        full_name = html.unescape(title_match.group(1)).strip()
+
+    followers = 0
+    followers_match = re.search(r'([\d,.]+[KM]?) Followers', text)
+    if followers_match:
+        followers = _parse_abbreviated_count(followers_match.group(1))
+
+    is_private = "This Account is Private" in text
+
+    return {
+        "data": {
+            "user": {
+                "id": user_id,
+                "full_name": full_name,
+                "is_private": is_private,
+                "edge_followed_by": {"count": followers},
+            }
+        }
+    }

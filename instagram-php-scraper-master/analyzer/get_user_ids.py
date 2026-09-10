@@ -21,7 +21,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ig_scraper.client import MissingSessionError, fetch_user_profile
+from ig_scraper.client import MissingSessionError, fetch_user_profile, fetch_user_profile_html
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -55,7 +62,13 @@ def main() -> None:
     for username in usernames:
         print(f"Processing: @{username} ... ", end="")
         try:
-            data = fetch_user_profile(username)
+            try:
+                data = fetch_user_profile(username)
+            except MissingSessionError:
+                raise
+            except Exception as api_error:
+                print(f"[API failed: {api_error}] falling back to HTML scrape... ", end="")
+                data = fetch_user_profile_html(username)
             user = (data.get("data") or {}).get("user") or {}
             user_id = user.get("id")
             if not user_id:
