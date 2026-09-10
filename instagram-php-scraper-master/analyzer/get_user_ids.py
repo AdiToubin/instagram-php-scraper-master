@@ -2,10 +2,11 @@
 """
 get_user_ids.py - Python port of scraper/get_user_ids.php.
 
-Converts a list of Instagram usernames to user_ids via the private
-web_profile_info endpoint, and writes user_ids_<timestamp>.json to the
-project root - the same location run_daily_stories.py's
-find_latest_json_file() already reads from.
+Converts a list of Instagram usernames to user_ids by reading the plain
+profile page HTML (the private web_profile_info API is consistently
+rate-limited even with a valid session - see ig_scraper/client.py), and
+writes user_ids_<timestamp>.json to the project root - the same location
+run_daily_stories.py's find_latest_json_file() already reads from.
 
 Usage:
     python get_user_ids.py username1 username2 ...
@@ -21,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from ig_scraper.client import MissingSessionError, fetch_user_profile, fetch_user_profile_html
+from ig_scraper.client import MissingSessionError, fetch_user_profile_html
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     try:
@@ -62,13 +63,10 @@ def main() -> None:
     for username in usernames:
         print(f"Processing: @{username} ... ", end="")
         try:
-            try:
-                data = fetch_user_profile(username)
-            except MissingSessionError:
-                raise
-            except Exception as api_error:
-                print(f"[API failed: {api_error}] falling back to HTML scrape... ", end="")
-                data = fetch_user_profile_html(username)
+            # web_profile_info (the private JSON API) is consistently rate-limited
+            # (429 / connection reset) even with a valid session - go straight to
+            # the plain profile page instead of wasting a doomed request on it first.
+            data = fetch_user_profile_html(username)
             user = (data.get("data") or {}).get("user") or {}
             user_id = user.get("id")
             if not user_id:
